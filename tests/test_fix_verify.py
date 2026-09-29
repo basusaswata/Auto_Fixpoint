@@ -211,3 +211,61 @@ def test_python_builds_run_in_their_own_venv(tmp_path, policy, lock):
                                          "test": ["python", "-c", probe]}]
     v = verify.verify_build(g, patch, meta, repo, policy)
     assert next(c for c in v["checks"] if c["name"] == "test")["passed"], v["checks"]
+
+
+def test_single_job_cli_chain(tmp_path, policy, lock, monkeypatch):
+    """fix-all -> build-all -> sign --signing none -> publish --allow-unsigned, as fixpoint.yml runs it."""
+    from fixpoint import cli, publish
+    from fixpoint.model import save_findings, write_json
+    from tests.conftest import ROOT, FakeGitHub
+
+    repo = sandbox(tmp_path, {"app/__init__.py": "", "app/db.py": VULN, "setup.cfg": "[x]\n"})
+    f = sqli()
+    g = group_for(f)
+    w = tmp_path / "work"
+    save_findings(w / "findings.json", [f])
+    write_json(w / "plan.json", {"schema": "fixpoint/plan/v1", "meta": {}, "groups": [g], "deferred": []})
+    gh = FakeGitHub("acme/shop", "main", {"app/__init__.py": "", "app/db.py": VULN, "setup.cfg": "[x]\n"})
+    run = {"repo": "acme/shop", "branch": "main", "sha": gh.refs["main"], "run_id": "7", "mode": "fix",
+           "actor": "alice", "run_url": "https://x/runs/7"}
+    write_json(w / "run.json", run)
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps({
+        "responses": {"fix_cwe": [FIX_OK], "verify": [{
+            "findings": [{"id": f.id, "fixed": True, "reasoning": "ok"}], "new_issues": [],
+            "test_meaningful": True, "confidence": 0.9, "summary": "ok"}]},
+        "edits": {"fix_cwe": {"app/db.py": FIXED, "tests/test_db.py": TEST}}}))
+    monkeypatch.setenv("FIXPOINT_AGENT", f"scripted:{script}")
+    pol = tmp_path / "policy.yaml"
+    policy.raw["verify"]["commands"] = [{"marker": "setup.cfg", "install": [], "build": [],
+                                         "test": [sys.executable, "-c", "import app.db"]}]
+    import yaml
+    pol.write_text(yaml.safe_dump(policy.raw))
+    base = ["--policy", str(pol), "--skills-lock", str(ROOT / "skills.lock")]
+    common = ["--plan", str(w / "plan.json"), "--findings", str(w / "findings.json"), "--repo-dir", str(repo),
+              "--run", str(w / "run.json"), "--out-dir", str(w)]
+    assert cli.main([*base, "fix-all", *common]) == 0
+    assert cli.main([*base, "build-all", *common]) == 0
+    assert worktree.capture_diff(repo) == ""  # checkout left clean between groups
+    assert cli.main([*base, "sign", "--signing", "none", "--plan", str(w / "plan.json"), "--findings",
+                     str(w / "findings.json"), "--fix-dir", str(w / "fix"), "--verdict-dir", str(w / "verdicts"),
+                     "--run", str(w / "run.json"), "--out-dir", str(w / "bundles")]) == 0
+    assert (w / "bundles" / f"{g['id']}.bundle.json").is_file()
+    res = publish.publish(w / "bundles", run, policy, gh, "", signing="none", allow_unsigned=True)
+    assert res[0]["status"] == "opened" and gh.files_at(gh.prs[0]["head"]["ref"])["app/db.py"] == FIXED
+
+
+def test_ingest_report_inside_target_repo(tmp_path, monkeypatch):
+    from fixpoint import cli
+    from fixpoint.model import load_findings
+    from tests.conftest import FIXTURES, ROOT
+
+    monkeypatch.chdir(ROOT)
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "snyk.json").write_text((FIXTURES / "snyk.json").read_text())
+    out = tmp_path / "sca.json"
+    assert cli.main(["ingest", "--kind", "sca", "--report", "reports/snyk.json", "--base-dir", str(tmp_path),
+                     "--out", str(out)]) == 0
+    assert len(load_findings(out)[0]) == 2
+    assert cli.main(["ingest", "--kind", "sca", "--report", "../../etc/passwd", "--base-dir", str(tmp_path),
+                     "--out", str(out)]) == 1

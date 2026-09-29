@@ -1,145 +1,90 @@
 # Fixpoint setup
 
-## 1. Two GitHub Apps
+## 1. One GitHub App
 
-Create both at the org level (**Settings → Developer settings → GitHub Apps → New**). Disable webhooks.
-Neither App needs any event subscriptions.
-
-### `fixpoint-read`
+Create one App (org **Settings → Developer settings → GitHub Apps → New**), e.g. `fixpoint-bot`. Disable
+webhooks; no event subscriptions.
 
 | Repository permission | Access | Why |
 |---|---|---|
-| Contents | Read | pin, checkout, read files |
-| Pull requests | Read | dedupe, reconcile |
-| Issues | Read | reconcile reads closing comments |
+| Contents | Read & write | checkout, blobs/trees/commits, `fixpoint/*` branches |
+| Pull requests | Read & write | dedupe, open PRs, auto-merge |
+| Issues | Read & write | labels on PRs, reconcile reads closing comments |
 | Metadata | Read | mandatory |
 
-### `fixpoint-write`
+Do **not** grant Workflows, Actions, Administration or Secrets: without `workflows` the App cannot touch
+`.github/workflows/*` even if every other check failed.
 
-| Repository permission | Access | Why |
+Install it on each target repo you enrol, and nothing else. The skills repo
+`basusaswata/SecCodeAndRevAgent` is public, so no installation is needed there.
+
+Commits are created through the Git Data API without an explicit author, so GitHub signs them and shows
+them as **Verified**, authored by `fixpoint-bot[bot]`.
+
+## 2. Secrets and variables
+
+In `ai-ssdlc-fixpoint` → Settings → Secrets and variables → Actions:
+
+| Kind | Name | Value |
 |---|---|---|
-| Contents | Read & write | blobs, trees, commits, `fixpoint/*` branches |
-| Pull requests | Read & write | open PRs, enable auto-merge |
-| Issues | Read & write | labels on PRs |
-| Metadata | Read | mandatory |
+| Variable | `FIXPOINT_APP_ID` | the App id |
+| Secret | `FIXPOINT_APP_KEY` | the App private key (PEM) |
+| Secret | `FIXPOINT_ANTHROPIC_API_KEY` | Anthropic API key |
+| Variable (optional) | `FIXPOINT_MODEL` | default `claude-sonnet-5-5` |
+| Variable (optional) | `FIXPOINT_CLAUDE_VERSION` | default `2.1.212` |
+| Variable (optional) | `FIXPOINT_JAVA_VERSION` | JDK when a Java repo pins none (default 17) |
+| Variable (optional) | `FIXPOINT_METRICS_URL` / secret `FIXPOINT_METRICS_TOKEN` | reconcile POST |
 
-Do **not** grant Workflows, Actions, Administration or Secrets. Without `workflows` the App cannot create or
-modify `.github/workflows/*` even if every other check failed.
+Protect `main` of `ai-ssdlc-fixpoint` (reviews required on `policy/`, `skills.lock`, `.github/`): whoever can
+change the workflow can use the App key.
 
-Commits created through the Git Data API without an explicit author are signed by GitHub and show as
-**Verified**, authored by `fixpoint-write[bot]`.
+## 3. Runner: one GitHub-hosted job, nothing pre-installed
 
-### Installing
+`fixpoint.yml` is a single job on `ubuntu-latest`. It installs everything itself, pinned:
 
-Install both Apps on each target repo you enrol (and nothing else). The skills repo
-`basusaswata/SecCodeAndRevAgent` is public, so no installation is needed there; if you make it private,
-also install `fixpoint-read` on it and pass its token to `fixpoint skills install` (`FIXPOINT_READ_TOKEN`).
-
-Workflows request tokens with `owner` + `repositories: <target>`, so every token is scoped to one repo and
-expires within an hour.
-
-## 2. Secrets, variables, environment
-
-In `ai-ssdlc-fixpoint` → Settings:
-
-**Variables**
-
-| Name | Example | Notes |
-|---|---|---|
-| `FIXPOINT_READ_APP_ID` | `123456` | |
-| `FIXPOINT_WRITE_APP_ID` | `123457` | set on the `fixpoint-publish` environment |
-| `FIXPOINT_MODEL` | `claude-sonnet-5-5` | default if unset |
-| `FIXPOINT_CLAUDE_VERSION` | `2.1.212` | pinned Claude Code version |
-| `FIXPOINT_RUNNER` | `["ubuntu-latest"]` (default) | JSON array of labels |
-| `FIXPOINT_BUILD_RUNNER` | `["ubuntu-latest"]` | optional separate pool for target code |
-| `FIXPOINT_JAVA_VERSION` | `17` | JDK when the repo pins none |
-| `FIXPOINT_PUBLISH_RUNNER` | `["ubuntu-latest"]` | optional separate runner for publish |
-| `FIXPOINT_METRICS_URL` | `https://metrics.example.com/fixpoint` | optional, reconcile POST |
-
-**Repository secrets**
-
-| Name | Used by |
+| Tool | Installed by |
 |---|---|
-| `FIXPOINT_READ_APP_KEY` | prepare, publish (dry run), reconcile |
-| `FIXPOINT_ANTHROPIC_API_KEY` | prepare, fix, verify-ai |
-| `FIXPOINT_METRICS_TOKEN` | reconcile (optional) |
+| git (if missing) | `apt-get` |
+| Python 3.11 + `fixpoint` CLI (`pyyaml`, `requests`) | `actions/setup-python` + `pip install .` |
+| Node.js 20 + Claude Code `FIXPOINT_CLAUDE_VERSION` | `actions/setup-node` + `npm install -g` |
+| AISecCore skills (commit + hash from `skills.lock`) | `fixpoint skills install` |
+| Target build toolchain (only in `mode: fix` with planned fixes) | `fixpoint toolchain` + the matching setup action |
 
-**Environment `fixpoint-publish`** (Settings → Environments → New):
-
-- Secret `FIXPOINT_WRITE_APP_KEY` (environment secret, not repository secret).
-- Variable `FIXPOINT_WRITE_APP_ID`.
-- Deployment branches: **Selected branches → `main` only**. This stops a modified workflow on another branch
-  from reaching the write key.
-- Optional: required reviewers, if a human should approve each publish.
-
-Protect `main` of `ai-ssdlc-fixpoint` (reviews required, CODEOWNERS on `policy/`, `skills.lock`,
-`.github/`). The cosign signer identity is `https://github.com/<org>/ai-ssdlc-fixpoint/.github/workflows/fixpoint.yml@refs/heads/main`.
-
-**Model access alternatives.** The default is a direct API key. For Amazon Bedrock set
-`CLAUDE_CODE_USE_BEDROCK=1` and AWS credentials on the AI steps (add an OIDC role step to those jobs);
-for Vertex set `CLAUDE_CODE_USE_VERTEX=1` with Workload Identity Federation. `fixpoint/agent.py` already
-passes those variables through; nothing else changes.
-
-**GHES.** The Python code reads `GITHUB_API_URL` / `GITHUB_GRAPHQL_URL` (set by Actions). For signing set
-`FIXPOINT_OIDC_ISSUER=https://<ghes-host>/_services/token` on the publish job and point cosign at your
-Sigstore instance if public Sigstore is not reachable.
-
-## 3. Runners and egress
-
-### Default: GitHub-hosted runners (`ubuntu-latest`), nothing pre-installed
-
-Fixpoint assumes a bare Ubuntu VM and installs everything itself, pinned:
-
-| Tool | Installed by | Jobs |
-|---|---|---|
-| git, tar, unzip | `apt-get` (only if missing) | all that use the composite action |
-| Python 3.11 + `fixpoint` (`pyyaml`, `requests`) | `actions/setup-python` + `pip` | all |
-| Node.js 20 + Claude Code `FIXPOINT_CLAUDE_VERSION` | `actions/setup-node` + `npm install -g` | prepare, fix, verify-ai |
-| AISecCore skills (commit + hash from `skills.lock`) | `fixpoint skills install` | prepare, fix, verify-ai |
-| cosign | `sigstore/cosign-installer` | sign, publish |
-| Target build toolchain, detected from the repo's marker file | `fixpoint toolchain` + setup actions | verify-build only |
-
-Build toolchain per marker (versions from the repo's own files when present):
+Build toolchain per marker file (versions from the repo's own files when present):
 
 | Marker | Installed | Version from |
 |---|---|---|
-| `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `package.json` | Node.js + `corepack enable` (yarn/pnpm) | `.nvmrc` / `.node-version`, else 20 |
-| `pom.xml` | Temurin JDK + Maven (`apt`, unless `./mvnw` exists) | `.java-version` / `.sdkmanrc` / `.tool-versions`, else `FIXPOINT_JAVA_VERSION` (17) |
-| `build.gradle(.kts)` | Temurin JDK; the repo's `./gradlew` downloads Gradle | as above |
+| `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `package.json` | Node.js + `corepack enable` | `.nvmrc` / `.node-version`, else 20 |
+| `pom.xml` | Temurin JDK + Maven (`apt`, unless `./mvnw` exists) | `.java-version` / `.sdkmanrc` / `.tool-versions`, else 17 |
+| `build.gradle(.kts)` | Temurin JDK; the repo's `./gradlew` fetches Gradle | as above |
 | `go.mod` | Go (`cache: false`) | `go.mod` |
-| `pyproject.toml`, `requirements.txt` | Python (+ a throwaway venv per build, pytest added) | `.python-version`, else 3.11 |
+| `pyproject.toml`, `requirements.txt` | Python; a throwaway venv per build, pytest added | `.python-version`, else 3.11 |
 
-Hosted runners are ephemeral VMs (one job, then destroyed), which is the isolation Fixpoint wants for jobs
-that touch untrusted code. No caches are used anywhere, so target code can never poison this repo's
-Actions cache.
+### POC security trade-offs of the single job
 
-### Egress (POC scope)
+Everything shares one VM, so the separation is per step rather than per job:
 
-This POC runs on plain GitHub-hosted runners and does **not** enforce an egress allowlist: a hosted VM
-cannot be firewalled from the workflow. What limits exposure instead: jobs that hold secrets never run
-target-repo code, the job that runs target code (`verify-build`) holds no secrets or tokens, and every VM
-is destroyed after its job.
+- The model key is only in the environment of the AI steps (discover, triage, fix + verify).
+- The App token used for checkout and dedupe is **revoked** before any target-repo code runs; a fresh token is
+  minted only for the final "Raise PRs" step.
+- The install/build/test step has no secrets in its environment, and child processes get a scrubbed env.
+- No egress allowlist is enforced (a hosted VM cannot be firewalled from the workflow).
+- Bundles are not cosign-signed: nothing crosses a job boundary, so `publish --allow-unsigned` is used.
 
-Hosts Fixpoint needs, for when you move to an enforced allowlist (self-hosted runners behind a firewall,
-or GitHub-hosted runners with Azure private networking):
+Target-repo code still runs on the same VM as a process that held secrets earlier. For production, go back to
+the split multi-job pipeline (git history, commit `70a5ec0`) with signed handoff and a protected environment.
+
+Hosts the job contacts, for when you move to an enforced allowlist:
 
 | Destination | Purpose |
 |---|---|
 | `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, `*.actions.githubusercontent.com`, `*.blob.core.windows.net` | Actions runtime, artifacts, API, action + tool downloads |
 | `api.anthropic.com` | model |
 | `api.osv.dev` | vulnerability data |
-| `fulcio.sigstore.dev`, `rekor.sigstore.dev`, `tuf-repo-cdn.sigstore.dev` | keyless signing / verification |
 | `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`, `registry.yarnpkg.com`, `nodejs.org` | Python / Node |
 | `repo.maven.apache.org`, `repo1.maven.org`, `services.gradle.org`, `plugins.gradle.org`, `downloads.gradle.org`, `api.adoptium.net` | Java |
 | `proxy.golang.org`, `sum.golang.org`, `go.dev`, `dl.google.com`, `storage.googleapis.com` | Go |
 | `*.archive.ubuntu.com`, `security.ubuntu.com` | apt (git / maven only if missing) |
-
-### Alternative: self-hosted runners
-
-Set `FIXPOINT_RUNNER` (and optionally `FIXPOINT_BUILD_RUNNER` / `FIXPOINT_PUBLISH_RUNNER`) to a JSON label list,
-e.g. `["self-hosted","linux","fixpoint-sandbox"]`. Use ephemeral, non-root runners without cloud metadata
-access, and enforce the destinations above at the network layer. Pre-installing the pinned Claude Code version and your
-toolchains in the image is optional; the install steps run either way and pin the same versions.
 
 ## 4. Enrol a repo
 

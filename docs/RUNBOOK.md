@@ -38,7 +38,8 @@ The `report` job writes the job summary and uploads `fixpoint-report` with:
 - `openvex.json`: SCA statements (`not_reachable` → `not_affected` / `vulnerable_code_not_in_execute_path`;
   `fix` → `affected` + action).
 
-Intermediate artifacts (`prepare`, `fix-*`, `verdict-*`, `signed`, `publish`) hold every stage's JSON for
+The `fixpoint-results` artifact holds every stage's JSON (`run.json`, `sast.json`, `sca.json`,
+`findings.json`, `plan.json`, `fix/<group>/`, `verdicts/`, `bundles/`, `publish.json`, `report/`) for
 debugging; each stage can be re-run locally from them with the same CLI subcommand.
 
 ## Handle a bad PR
@@ -81,5 +82,5 @@ overrides a human "no".
   and the target repo must allow auto-merge with required checks.
 - **Switch SCA to OSV-Scanner:** install `osv-scanner` on the runner image and set `discover.sca.engine:
   osv-scanner`.
-- **Re-run a failed publish:** re-run the `publish` job; dedupe and the open-PR check make it idempotent.
-  Bundles are bound to the run id, so bundles from an older run are rejected.
+- **Re-run:** re-run the workflow with the same inputs; dedupe and the open-PR check make it idempotent,
+  so no duplicate PRs are raised.

@@ -60,11 +60,13 @@ def build_changes(gh: GitHub, repo: str, head_sha: str, patch: str) -> list[dict
 
 
 def publish(bundles_dir: Path, run: dict[str, Any], policy: Policy, gh: GitHub, identity: str,
-            dry_run: bool = False, signing: str = "cosign", out: Path | None = None) -> list[dict[str, Any]]:
+            dry_run: bool = False, signing: str = "cosign", out: Path | None = None,
+            allow_unsigned: bool = False) -> list[dict[str, Any]]:
+    """``allow_unsigned``: single-job mode, where bundles never leave the job that verified them."""
     repo, branch, pinned = run["repo"], run["branch"], run["sha"]
     results: list[dict[str, Any]] = []
-    if signing != "cosign" and not dry_run:
-        raise SignError("unsigned bundles can only be used with --dry-run")
+    if signing != "cosign" and not (dry_run or allow_unsigned):
+        raise SignError("unsigned bundles need --dry-run or --allow-unsigned (single-job mode)")
     if not policy.is_enrolled(repo):
         raise SignError(f"{repo} is not enrolled in policy")
 

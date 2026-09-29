@@ -166,8 +166,12 @@ def cmd_ingest(a: argparse.Namespace) -> int:
     from fixpoint.model import save_findings
 
     policy = _policy(a)
-    fs = ingest(a.report, a.format, a.kind, int(policy.limits.get("report_max_bytes", 26214400)),
-                Path(a.workspace) if a.workspace else None)
+    report, workspace = a.report, Path(a.workspace) if a.workspace else None
+    if a.base_dir and not report.startswith("https://"):
+        # a relative report path is a file inside the target repo checkout
+        workspace = Path(a.base_dir)
+        report = str(workspace / report)
+    fs = ingest(report, a.format, a.kind, int(policy.limits.get("report_max_bytes", 26214400)), workspace)
     save_findings(a.out, fs, {f"{a.kind}_mode": "report", f"{a.kind}_format": a.format})
     return 0
 
@@ -277,6 +281,51 @@ def cmd_verify(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fix_all(a: argparse.Namespace) -> int:
+    """Single-job mode: fix every planned group, then AI-verify it, in one checkout."""
+    from fixpoint import fix, verify, worktree
+    from fixpoint.model import load_findings, read_json, write_json
+
+    run, policy, lock, runtime = _run(a), _policy(a), _lock(a), _runtime()
+    plan = read_json(a.plan)
+    fs, _ = load_findings(a.findings)
+    by_id = {f.id: f for f in fs}
+    repo_dir, out = Path(a.repo_dir), Path(a.out_dir)
+    for g in plan["groups"]:
+        gf = [by_id[i] for i in g["finding_ids"] if i in by_id]
+        meta = fix.run_fix(g, gf, repo_dir, run["repo"], run["sha"], policy, lock, runtime, out / "fix")
+        if meta["status"] != "patched":
+            LOG.info("fix %s: %s", g["id"], meta["status"])
+            continue
+        patch = (out / "fix" / g["id"] / "patch.diff").read_text(encoding="utf-8")
+        v = verify.verify_rescan(g, gf, patch, meta, repo_dir, run["repo"], run["sha"], policy, lock, runtime)
+        worktree.reset(repo_dir)
+        write_json(out / "verdicts" / f"{g['id']}.rescan.verdict.json", v)
+        LOG.info("verify rescan %s: %s", g["id"], "PASS" if v["passed"] else "FAIL")
+    return 0
+
+
+def cmd_build_all(a: argparse.Namespace) -> int:
+    """Single-job mode: install/build/test every patch that passed the AI re-scan."""
+    from fixpoint import verify, worktree
+    from fixpoint.model import read_json, write_json
+
+    policy = _policy(a)
+    plan = read_json(a.plan)
+    repo_dir, out = Path(a.repo_dir), Path(a.out_dir)
+    for g in plan["groups"]:
+        rescan = out / "verdicts" / f"{g['id']}.rescan.verdict.json"
+        if not rescan.is_file() or not read_json(rescan).get("passed"):
+            continue  # no point building a patch that already failed
+        gdir = out / "fix" / g["id"]
+        patch = (gdir / "patch.diff").read_text(encoding="utf-8")
+        v = verify.verify_build(g, patch, read_json(gdir / "meta.json"), repo_dir, policy)
+        worktree.reset(repo_dir)
+        write_json(out / "verdicts" / f"{g['id']}.build.verdict.json", v)
+        LOG.info("verify build %s: %s", g["id"], "PASS" if v["passed"] else "FAIL")
+    return 0
+
+
 def cmd_sign(a: argparse.Namespace) -> int:
     from fixpoint import sign
     from fixpoint.model import read_json
@@ -293,7 +342,7 @@ def cmd_publish(a: argparse.Namespace) -> int:
 
     tok = "FIXPOINT_READ_TOKEN" if a.dry_run and not os.environ.get("FIXPOINT_WRITE_TOKEN") else "FIXPOINT_WRITE_TOKEN"
     res = publish.publish(Path(a.bundles), _run(a), _policy(a), _gh(tok), a.identity, a.dry_run, a.signing,
-                          Path(a.out))
+                          Path(a.out), allow_unsigned=a.allow_unsigned)
     for r in res:
         line = f"{r['status']:>8}  {r.get('group_id', r.get('bundle'))}  {r.get('url') or r.get('reason', '')}"
         print(line)
@@ -400,6 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--report", required=True)
     s.add_argument("--format", default="auto")
     s.add_argument("--workspace")
+    s.add_argument("--base-dir", help="resolve a relative report path inside this directory (the target repo)")
     s.add_argument("--out", required=True)
     s.set_defaults(fn=cmd_ingest)
 
@@ -448,6 +498,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out-dir", required=True)
     s.set_defaults(fn=cmd_verify)
 
+    for name, fn, helptext in (("fix-all", cmd_fix_all, "single job: fix + AI-verify every planned group"),
+                               ("build-all", cmd_build_all, "single job: install/build/test every verified patch")):
+        s = sub.add_parser(name, help=helptext)
+        s.add_argument("--plan", required=True)
+        s.add_argument("--findings", required=True)
+        s.add_argument("--repo-dir", required=True)
+        s.add_argument("--run", required=True)
+        s.add_argument("--out-dir", required=True, help="writes <out-dir>/fix/<group>/ and <out-dir>/verdicts/")
+        s.set_defaults(fn=fn)
+
     s = sub.add_parser("sign", help="bundle and sign verified patches (cosign keyless)")
     s.add_argument("--plan", required=True)
     s.add_argument("--findings", required=True)
@@ -465,6 +525,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out", required=True)
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--signing", choices=["cosign", "none"], default="cosign")
+    s.add_argument("--allow-unsigned", action="store_true",
+                   help="single-job mode: bundles were built in this same job, no signed handoff")
     s.set_defaults(fn=cmd_publish)
 
     s = sub.add_parser("report", help="summary.md, dispositioned SARIF, OpenVEX")

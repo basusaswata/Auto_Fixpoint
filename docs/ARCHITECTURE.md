@@ -5,45 +5,55 @@ It lives in its own repo; target repos get no workflow files and no changes othe
 
 ## Flow
 
+The POC runs as **one job** in `.github/workflows/fixpoint.yml`. Each box is one or more steps; each step is
+one `fixpoint <command>` reading and writing JSON under `work/`.
+
 ```mermaid
 flowchart TD
-    T([workflow_dispatch / repository_dispatch fixpoint-sweep]) --> IN[inputs: validate]
-    IN --> PIN[pin: branch -> SHA<br/>read App token]
-    PIN --> CO[checkout @SHA, persist-credentials=false<br/>archive source.tar<br/>neutralise agent config]
-    CO --> SAST{sast_report?}
-    CO --> SCA{sca_report?}
-    SAST -- yes --> ING1[ingest: SARIF adapter]
-    SAST -- no --> DS[discover SAST<br/>review skill, risk-ranked batches]
-    SCA -- yes --> ING2[ingest: Snyk / OSV / SARIF adapter]
-    SCA -- no --> DC[discover SCA<br/>supply-chain skill inventory<br/>+ OSV API confirmation]
-    ING1 & DS & ING2 & DC --> AL[align: re-anchor by snippet<br/>stale / unlocatable]
-    AL --> DD[dedupe: GitHub PR markers<br/>in_flight / fixed / rejected]
-    DD --> TR[triage skill<br/>+ policy override]
-    TR --> PL[plan: group, order, cap<br/>strategy + autonomy]
-    PL -- mode=review --> RP
-    PL -- mode=fix --> FX[fix x N<br/>matrix, one sandbox per group]
-    FX --> VA[verify-ai x N<br/>diff rules, OSV re-scan, verify skill]
-    FX --> VB[verify-build x N<br/>install/build/test, no secrets]
-    VA & VB --> SG[sign: re-check policy<br/>cosign keyless bundle]
-    SG --> PB[publish: verify signature, policy, dedupe<br/>moved base, Git Data API, PR]
-    PB --> RP[report: summary.md, SARIF, OpenVEX<br/>always runs]
-    PB -. later .-> RC[reconcile.yml: merged / rejected<br/>eval cases]
+    T([workflow_dispatch / repository_dispatch fixpoint-sweep]) --> TOOLS[install Python, Node, Claude Code]
+    TOOLS --> IN[inputs: validate]
+    IN --> TOK1[App token #1]
+    TOK1 --> PIN[pin: branch -> SHA]
+    PIN --> CO[checkout @SHA, persist-credentials=false<br/>neutralise agent config]
+    CO --> SK[skills install: pinned commit, hash verified]
+    SK --> SAST{sast_report?}
+    SK --> SCA{sca_report?}
+    SAST -- yes --> ING1[ingest: SARIF]
+    SAST -- no --> DS[AI scan: review skill]
+    SCA -- yes --> ING2[ingest: Snyk / OSV / SARIF]
+    SCA -- no --> DC[AI inventory + OSV API]
+    ING1 & DS & ING2 & DC --> AL[align]
+    AL --> DD[dedupe: existing Fixpoint PRs]
+    DD --> REV[revoke token #1]
+    REV --> TR[triage: AI + policy override]
+    TR --> PL[plan]
+    PL -- mode=review or nothing to fix --> RP
+    PL -- mode=fix --> FX[fix-all: fix + AI verify each group]
+    FX --> TC[install target toolchain]
+    TC --> BD[build-all: install/build/test each patch, no secrets]
+    BD --> BU[sign --signing none: re-check policy, bundle]
+    BU --> TOK2[App token #2]
+    TOK2 --> PB[publish: policy + dedupe again, moved base,<br/>Git Data API commit, PR]
+    PB --> RP[report: summary.md, SARIF, OpenVEX · always]
 ```
 
-## Jobs and privileges
+## Steps and what they can see
 
-| Job | AI | Target-repo code runs | GitHub token | Other secrets | Notes |
-|---|---|---|---|---|---|
-| `prepare` | yes | no | **read** App, target repo only (pin, checkout, dedupe) | model key | archives the pinned tree for workers |
-| `fix` (matrix) | yes | no (Bash off by default) | **none** | model key | unpacks the archive; no git credential exists anywhere |
-| `verify-ai` (matrix) | yes | no | none | model key | diff rules, OSV re-scan, verify skill |
-| `verify-build` (matrix) | no | **yes** | none | **none** | install/build/test with a scrubbed env |
-| `sign` | no | no | none | `id-token: write` | re-checks policy, signs bundle (Sigstore keyless) |
-| `publish` | no | no | **write** App, target repo only | env `fixpoint-publish` | verifies signature first; dry run uses the read App |
-| `report` | no | no | none | none | `if: always()` |
-| `reconcile` | no | no | read App per enrolled repo | optional metrics token | scheduled |
+| Step | AI | Runs target code | Token in env | Model key in env |
+|---|---|---|---|---|
+| inputs, pin, checkout, neutralise, skills | no | no | token #1 (pin, checkout) | no |
+| SAST / SCA AI scan | yes | no | no | yes |
+| ingest, align | no | no | no | no |
+| dedupe | no | no | token #1 | no |
+| revoke token #1 | no | no | token #1 (to revoke it) | no |
+| triage, fix-all | yes | no (agent has no shell) | no | yes |
+| toolchain setup, build-all | no | **yes** | no | no |
+| sign (bundle), publish | no | no | token #2 (publish only) | no |
+| report | no | no | no | no |
 
-`GITHUB_TOKEN` has `permissions: {}` at workflow level and is never used cross-repo. No PATs.
+`GITHUB_TOKEN` has `contents: read` only (to check out this repo) and is never used on the target. No PATs.
+The earlier split multi-job design (per-job isolation, cosign-signed handoff, protected publish
+environment) is in git history at commit `70a5ec0` for when this graduates from POC.
 
 ## Trust boundaries
 
@@ -57,12 +67,11 @@ flowchart TD
 2. **Agent → pipeline.** Model output is structured (`--json-schema`), validated again in Python, and never
    executed. File paths are normalised and confined to the repo; SCA versions from the inventory must appear
    verbatim in the manifest; CVEs and fixed versions come only from OSV or a scanner report.
-3. **Target code → runner.** Only `verify-build` executes target code, and that job holds no secrets and no
-   tokens. Its verdict can only claim "build passed" — equivalent to the repo owner controlling their tests.
-4. **AI jobs → publish.** The patch reaching publish is the byte-exact patch from the `fix` job (hash-checked),
-   bundled with both verdicts and signed in the `sign` job. Publish verifies the signature against
-   `https://github.com/<fixpoint repo>/.github/workflows/fixpoint.yml@<ref>` and the Actions OIDC issuer, checks
-   the bundle belongs to this run/repo/branch/SHA, then re-applies policy and dedupe against live GitHub.
+3. **Target code → runner.** Only the `build-all` step executes target code. Its environment has no secrets,
+   the checkout token has already been revoked, and the publish token does not exist yet. (POC caveat: it is
+   the same VM as the earlier AI steps.)
+4. **Fix → publish.** Publish takes the byte-exact patch whose hash both verdicts recorded, re-checks the
+   bundle belongs to this run/repo/branch/SHA, then re-applies policy and dedupe against live GitHub.
 5. **PR body.** Model/scanner text is HTML-escaped, `@mentions` are defused, and the hidden markers are
    parsed from the last occurrence only, so markers smuggled into quoted content are ignored.
 

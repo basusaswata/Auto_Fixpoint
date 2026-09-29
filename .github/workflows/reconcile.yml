@@ -69,12 +69,12 @@ jobs:
           echo "owner=${REPO%%/*}" >> "$GITHUB_OUTPUT"
           echo "name=${REPO#*/}" >> "$GITHUB_OUTPUT"
           echo "slug=${REPO//\//__}" >> "$GITHUB_OUTPUT"
-      - name: Read-only App token
+      - name: App token (target repo only)
         id: token
         uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2.1.1
         with:
-          app-id: ${{ vars.FIXPOINT_READ_APP_ID }}
-          private-key: ${{ secrets.FIXPOINT_READ_APP_KEY }}
+          app-id: ${{ vars.FIXPOINT_APP_ID }}
+          private-key: ${{ secrets.FIXPOINT_APP_KEY }}
           owner: ${{ steps.target.outputs.owner }}
           repositories: ${{ steps.target.outputs.name }}
       - name: Record outcomes
