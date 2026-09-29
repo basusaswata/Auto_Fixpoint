@@ -1,0 +1,187 @@
+# Fixpoint policy. Enforced in three places: plan, verify (and sign) and publish.
+# Anything not allowed here is denied. Uncertainty always resolves to
+# human_review or skip, never to a PR.
+version: 1
+
+# Repos Fixpoint may touch. Runs against any other repo fail at the pin stage.
+enrolled_repos:
+  - basusaswata/fixpoint-demo-app
+  # - <org>/<repo>
+
+limits:
+  prs_per_run: 5              # hard cap per run (the max_prs input can only lower it)
+  open_bot_prs_per_repo: 10   # never exceed this many open Fixpoint PRs per target branch
+  changed_files: 10           # per patch
+  changed_lines: 400          # added + removed, per patch
+  report_max_bytes: 26214400  # 25 MiB cap on fetched reports
+
+# Patches touching any of these globs are rejected outright.
+forbidden_paths:
+  - ".github/**"
+  - ".gitlab-ci.yml"
+  - ".circleci/**"
+  - "Jenkinsfile"
+  - "**/.env"
+  - "**/.env.*"
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/id_rsa*"
+  - "**/.npmrc"
+  - "**/.pypirc"
+  - "**/settings.xml"
+  - "**/.git/**"
+  - ".claude/**"
+  - "CLAUDE.md"
+  - "AGENTS.md"
+  - ".cursor*"
+  - ".cursor*/**"
+  - ".mcp.json"
+  - "AISecCore/**"
+  - "CODEOWNERS"
+  - "**/CODEOWNERS"
+
+tests:
+  # Files matching these globs are treated as tests.
+  patterns:
+    - "**/test/**"
+    - "**/tests/**"
+    - "**/__tests__/**"
+    - "**/spec/**"
+    - "**/*_test.go"
+    - "**/test_*.py"
+    - "**/*_test.py"
+    - "**/*.test.js"
+    - "**/*.test.ts"
+    - "**/*.spec.js"
+    - "**/*.spec.ts"
+    - "**/*Test.java"
+    - "**/*Tests.java"
+    - "**/*Test.kt"
+  forbid_deletion: true        # deleting a test file rejects the patch
+  forbid_weakening: true       # removing assertions or adding skip markers rejects the patch
+  require_new_test_for_sast: true
+
+triage:
+  min_confidence: 0.75         # fix below this -> human_review
+  fix_severities: [critical, high, medium]  # fix on anything else -> human_review
+  batch_size: 8
+  max_budget_usd: 3.0
+  context_lines: 25
+
+discover:
+  sast:
+    engine: skill              # phase 1: the review skill does the scanning
+    extensions: [".py", ".js", ".jsx", ".mjs", ".ts", ".tsx", ".java", ".kt", ".go", ".rb", ".php", ".cs", ".c", ".h", ".cpp", ".rs", ".swift", ".scala", ".sql", ".tf", ".yaml", ".yml", ".xml", ".html"]
+    excludes:
+      - "**/node_modules/**"
+      - "**/vendor/**"
+      - "**/dist/**"
+      - "**/build/**"
+      - "**/target/**"
+      - "**/.venv/**"
+      - "**/venv/**"
+      - "**/*.min.js"
+      - "**/test/**"
+      - "**/tests/**"
+      - "**/__tests__/**"
+      - "AISecCore/**"
+      - ".github/**"
+    max_files: 60
+    max_file_bytes: 200000
+    batch_size: 8
+    max_budget_usd: 4.0        # per batch (claude -p --max-budget-usd)
+    min_confidence: 0.3        # discover findings below this are dropped as noise
+  sca:
+    # skill: the supply-chain skill inventories manifests and flags suspect
+    #        pins; every CVE and fixed version is then confirmed against the
+    #        OSV API (deterministic). Unconfirmed claims never reach "fix".
+    # osv-scanner: run the OSV-Scanner binary (when installed on the runner).
+    engine: skill
+    confirm_with_osv_api: true
+    osv_api: "https://api.osv.dev"
+    max_budget_usd: 3.0
+    manifests: ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "requirements.txt", "requirements*.txt", "Pipfile.lock", "poetry.lock", "pyproject.toml", "go.mod", "go.sum", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile.lock", "composer.lock", "Cargo.lock"]
+
+fix:
+  max_budget_usd: 5.0
+  timeout_seconds: 1800
+  # Bash for the fix agent is off by default: any command it runs would
+  # execute target-repo code in a process that holds the model API key.
+  # When true, only the verify commands below for the detected markers are allowed.
+  allow_bash: false
+
+verify:
+  max_budget_usd: 3.0
+  min_confidence: 0.7
+  require_build: true          # no marker matched -> reject (fail safe)
+  timeout_seconds: 1800
+  # First marker (in order) that exists at the repo root wins.
+  commands:
+    - marker: package-lock.json
+      install: ["npm", "ci", "--ignore-scripts"]
+      build: ["npm", "run", "--if-present", "build"]
+      test: ["npm", "test"]
+    - marker: yarn.lock
+      install: ["yarn", "install", "--frozen-lockfile", "--ignore-scripts"]
+      build: ["yarn", "run", "--if-present", "build"]
+      test: ["yarn", "test"]
+    - marker: pnpm-lock.yaml
+      install: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"]
+      build: ["pnpm", "run", "--if-present", "build"]
+      test: ["pnpm", "test"]
+    - marker: package.json
+      install: ["npm", "install", "--ignore-scripts"]
+      build: ["npm", "run", "--if-present", "build"]
+      test: ["npm", "test"]
+    - marker: pom.xml
+      install: ["mvn", "-B", "-q", "-DskipTests", "dependency:go-offline"]
+      build: ["mvn", "-B", "-q", "-DskipTests", "package"]
+      test: ["mvn", "-B", "-q", "test"]
+    - marker: build.gradle
+      install: []
+      build: ["./gradlew", "--no-daemon", "assemble"]
+      test: ["./gradlew", "--no-daemon", "test"]
+    - marker: build.gradle.kts
+      install: []
+      build: ["./gradlew", "--no-daemon", "assemble"]
+      test: ["./gradlew", "--no-daemon", "test"]
+    - marker: go.mod
+      install: ["go", "mod", "download"]
+      build: ["go", "build", "./..."]
+      test: ["go", "test", "./..."]
+    - marker: pyproject.toml
+      install: ["python", "-m", "pip", "install", "-e", ".[test]"]
+      build: []
+      test: ["python", "-m", "pytest", "-q"]
+    - marker: requirements.txt
+      install: ["python", "-m", "pip", "install", "-r", "requirements.txt"]
+      build: []
+      test: ["python", "-m", "pytest", "-q"]
+  # Environment variables passed through to install/build/test (e.g. mirror config).
+  # Nothing else from the job environment reaches target-repo code.
+  pass_env: ["PIP_INDEX_URL", "NPM_CONFIG_REGISTRY", "GOPROXY", "MAVEN_OPTS", "JAVA_HOME", "GOPATH", "GOCACHE"]
+  # Optional command prefix to sandbox target-repo code, e.g.
+  # ["bwrap", "--unshare-all", "--share-net", ...] or a container wrapper.
+  sandbox_prefix: []
+
+# Branch rules: first match wins. Patterns are fnmatch globs.
+branch_rules:
+  - match: "main"
+    cve_upgrade: same-major-lowest-safe
+    autonomy: pr
+  - match: "master"
+    cve_upgrade: same-major-lowest-safe
+    autonomy: pr
+  - match: "release/*"
+    cve_upgrade: same-major-lowest-safe
+    autonomy: draft
+  - match: "*"
+    cve_upgrade: lowest-safe
+    autonomy: draft
+
+pr:
+  labels: ["fixpoint", "security"]
+  kind_labels:
+    sast: "fixpoint:sast"
+    sca: "fixpoint:sca"
+  reason_label_prefix: "fixpoint-reason/"   # e.g. fixpoint-reason/false-positive, used by reconcile

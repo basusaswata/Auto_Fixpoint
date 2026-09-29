@@ -1,0 +1,67 @@
+{
+  "description": "Flask app: SQLi (f-string), OS command injection, hard-coded API key; one safe twin of each.",
+  "sast": [
+    {
+      "cwe": [
+        "CWE-89"
+      ],
+      "file": "app.py",
+      "lines": [
+        14,
+        19
+      ],
+      "oracle": {
+        "file": "app.py",
+        "absent_regex": "execute\\(f\"SELECT"
+      }
+    },
+    {
+      "cwe": [
+        "CWE-78",
+        "CWE-77"
+      ],
+      "file": "app.py",
+      "lines": [
+        30,
+        33
+      ],
+      "oracle": {
+        "file": "app.py",
+        "absent_regex": "popen\\(\"ping -c 1 \" \\+ host\\)"
+      }
+    },
+    {
+      "cwe": [
+        "CWE-798",
+        "CWE-259",
+        "CWE-321"
+      ],
+      "file": "app.py",
+      "lines": [
+        7,
+        7
+      ],
+      "oracle": {
+        "file": "app.py",
+        "absent_regex": "fpdemo-7f3a9c2e1b8d4f6a0c5e"
+      }
+    }
+  ],
+  "negatives": [
+    {
+      "file": "app.py",
+      "lines": [
+        22,
+        27
+      ]
+    },
+    {
+      "file": "app.py",
+      "lines": [
+        36,
+        37
+      ]
+    }
+  ],
+  "sca": []
+}

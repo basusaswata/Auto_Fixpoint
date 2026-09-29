@@ -1,0 +1,459 @@
+# Fixpoint: out-of-band review -> fix -> PR.
+#
+# Privilege model (see docs/ARCHITECTURE.md):
+#   prepare       AI + read-only App token (target repo only)
+#   fix           AI, no GitHub token at all (works on an archive of the pinned tree)
+#   verify-ai     AI, no GitHub token, never runs target-repo code
+#   verify-build  runs target-repo code, NO secrets and no AI
+#   sign          no AI, no target code; id-token: write for cosign keyless
+#   publish       no AI; the only job with the write App key (environment: fixpoint-publish)
+#   report        no secrets; always runs
+name: fixpoint
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Target repository (org/name)
+        required: true
+      branch:
+        description: Target branch (main, release/*, feature branches)
+        required: true
+      sast_report:
+        description: SAST report URL or workspace path. Empty = DISCOVER
+        required: false
+        default: ""
+      sast_format:
+        description: SAST report format
+        type: choice
+        options: [auto, sarif]
+        default: auto
+      sca_report:
+        description: SCA report URL or workspace path. Empty = DISCOVER
+        required: false
+        default: ""
+      sca_format:
+        description: SCA report format
+        type: choice
+        options: [auto, snyk, osv, sarif]
+        default: auto
+      mode:
+        description: review (never writes to the target) or fix (also raises PRs)
+        type: choice
+        options: [review, fix]
+        default: review
+      max_prs:
+        description: Cap for this run (policy caps still apply)
+        required: false
+        default: ""
+      dry_run:
+        description: In fix mode, print the PRs that would be raised instead of raising them
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [fixpoint-sweep]
+
+permissions: {}
+
+concurrency:
+  group: fixpoint-${{ github.event.inputs.repo || github.event.client_payload.repo }}-${{ github.event.inputs.branch || github.event.client_payload.branch }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FIXPOINT_POLICY: policy/policy.yaml
+  FIXPOINT_SKILLS_LOCK: skills.lock
+  FIXPOINT_MODEL: ${{ vars.FIXPOINT_MODEL || 'claude-sonnet-5-5' }}
+  FIXPOINT_CLAUDE_VERSION: ${{ vars.FIXPOINT_CLAUDE_VERSION || '2.1.212' }}
+
+jobs:
+  prepare:
+    name: pin · findings · align · dedupe · triage · plan
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    outputs:
+      groups: ${{ steps.plan.outputs.groups }}
+      has_groups: ${{ steps.plan.outputs.has_groups }}
+      mode: ${{ steps.inputs.outputs.mode }}
+      dry_run: ${{ steps.inputs.outputs.dry_run }}
+      sha: ${{ steps.setup.outputs.sha }}
+    steps:
+      - name: Checkout Fixpoint
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Validate inputs
+        id: inputs
+        env:
+          FP_REPO: ${{ github.event.inputs.repo || github.event.client_payload.repo }}
+          FP_BRANCH: ${{ github.event.inputs.branch || github.event.client_payload.branch }}
+          FP_SAST_REPORT: ${{ github.event.inputs.sast_report || github.event.client_payload.sast_report }}
+          FP_SAST_FORMAT: ${{ github.event.inputs.sast_format || github.event.client_payload.sast_format }}
+          FP_SCA_REPORT: ${{ github.event.inputs.sca_report || github.event.client_payload.sca_report }}
+          FP_SCA_FORMAT: ${{ github.event.inputs.sca_format || github.event.client_payload.sca_format }}
+          FP_MODE: ${{ github.event.inputs.mode || github.event.client_payload.mode }}
+          FP_MAX_PRS: ${{ github.event.inputs.max_prs || github.event.client_payload.max_prs }}
+          FP_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run }}
+          FP_ACTOR: ${{ github.event.client_payload.requested_by || github.triggering_actor || github.actor }}
+        run: |
+          python -m pip install --disable-pip-version-check -q .
+          fixpoint inputs --out work/run.json
+
+      - name: Setup (read token, pin, checkout, neutralise, agent, skills)
+        id: setup
+        uses: ./.github/actions/setup-fixpoint
+        with:
+          source: checkout
+          owner: ${{ steps.inputs.outputs.owner }}
+          repo-name: ${{ steps.inputs.outputs.name }}
+          read-app-id: ${{ vars.FIXPOINT_READ_APP_ID }}
+          read-app-key: ${{ secrets.FIXPOINT_READ_APP_KEY }}
+          claude-version: ${{ env.FIXPOINT_CLAUDE_VERSION }}
+
+      - name: SAST findings (REPORT)
+        if: steps.inputs.outputs.sast_report != ''
+        env:
+          REPORT: ${{ steps.inputs.outputs.sast_report }}
+          FORMAT: ${{ github.event.inputs.sast_format || github.event.client_payload.sast_format || 'auto' }}
+        run: fixpoint ingest --kind sast --report "$REPORT" --format "$FORMAT" --workspace "$GITHUB_WORKSPACE" --out work/sast.json
+
+      - name: SAST findings (DISCOVER via review skill)
+        if: steps.inputs.outputs.sast_report == ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
+        run: fixpoint discover --kind sast --repo-dir target --run work/run.json --out work/sast.json
+
+      - name: SCA findings (REPORT)
+        if: steps.inputs.outputs.sca_report != ''
+        env:
+          REPORT: ${{ steps.inputs.outputs.sca_report }}
+          FORMAT: ${{ github.event.inputs.sca_format || github.event.client_payload.sca_format || 'auto' }}
+        run: fixpoint ingest --kind sca --report "$REPORT" --format "$FORMAT" --workspace "$GITHUB_WORKSPACE" --out work/sca.json
+
+      - name: SCA findings (DISCOVER via supply-chain skill + OSV)
+        if: steps.inputs.outputs.sca_report == ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
+        run: fixpoint discover --kind sca --repo-dir target --run work/run.json --out work/sca.json
+
+      - name: Align
+        run: fixpoint align --in work/sast.json --in work/sca.json --repo-dir target --run work/run.json --out work/aligned.json
+
+      - name: Dedupe (GitHub is the state store)
+        env:
+          FIXPOINT_READ_TOKEN: ${{ steps.setup.outputs.token }}
+        run: fixpoint dedupe --in work/aligned.json --run work/run.json --out work/deduped.json
+
+      - name: Triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
+        run: fixpoint triage --in work/deduped.json --repo-dir target --run work/run.json --out work/findings.json
+
+      - name: Plan
+        id: plan
+        run: fixpoint plan --in work/findings.json --run work/run.json --out work/plan.json
+
+      - name: Upload prepare outputs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: prepare
+          path: |
+            work/run.json
+            work/sast.json
+            work/sca.json
+            work/findings.json
+            work/plan.json
+            work/source.tar
+          if-no-files-found: ignore
+          retention-days: 14
+
+  fix:
+    name: fix ${{ matrix.group }}
+    needs: prepare
+    if: needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true'
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    timeout-minutes: 60
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        group: ${{ fromJSON(needs.prepare.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prepare
+          path: work
+      - uses: ./.github/actions/setup-fixpoint
+        with:
+          source: archive
+          claude-version: ${{ env.FIXPOINT_CLAUDE_VERSION }}
+      - name: Fix
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
+          GROUP: ${{ matrix.group }}
+        run: >
+          fixpoint fix --plan work/plan.json --findings work/findings.json --group "$GROUP"
+          --repo-dir target --run work/run.json --out-dir work/fix
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: fix-${{ matrix.group }}
+          path: work/fix/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  verify-ai:
+    name: verify (re-scan) ${{ matrix.group }}
+    needs: [prepare, fix]
+    if: ${{ !cancelled() && needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true' }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    timeout-minutes: 45
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        group: ${{ fromJSON(needs.prepare.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prepare
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: fix-${{ matrix.group }}
+          path: work/fix
+      - uses: ./.github/actions/setup-fixpoint
+        with:
+          source: archive
+          claude-version: ${{ env.FIXPOINT_CLAUDE_VERSION }}
+      - name: Verify (diff rules, OSV re-scan, verify skill)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
+          GROUP: ${{ matrix.group }}
+        run: >
+          fixpoint verify --phase rescan --plan work/plan.json --findings work/findings.json --group "$GROUP"
+          --fix-dir work/fix --repo-dir target --run work/run.json --out-dir work/verdicts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: verdict-rescan-${{ matrix.group }}
+          path: work/verdicts/
+          if-no-files-found: ignore
+
+  verify-build:
+    name: verify (build + test) ${{ matrix.group }}
+    needs: [prepare, fix]
+    if: ${{ !cancelled() && needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true' }}
+    # Target-repo code runs here. This job has no secrets, no GitHub token and no AI.
+    runs-on: ${{ fromJSON(vars.FIXPOINT_BUILD_RUNNER || vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    timeout-minutes: 60
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        group: ${{ fromJSON(needs.prepare.outputs.groups) }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prepare
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: fix-${{ matrix.group }}
+          path: work/fix
+      - uses: ./.github/actions/setup-fixpoint
+        with:
+          source: archive
+          install-agent: "false"
+      - name: Verify (diff rules, install, build, test)
+        env:
+          GROUP: ${{ matrix.group }}
+        run: >
+          fixpoint verify --phase build --plan work/plan.json --findings work/findings.json --group "$GROUP"
+          --fix-dir work/fix --repo-dir target --run work/run.json --out-dir work/verdicts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: verdict-build-${{ matrix.group }}
+          path: work/verdicts/
+          if-no-files-found: ignore
+
+  sign:
+    name: sign verified patches
+    needs: [prepare, fix, verify-ai, verify-build]
+    if: ${{ !cancelled() && needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true' }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    timeout-minutes: 15
+    permissions:
+      id-token: write   # Sigstore keyless signing only
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --disable-pip-version-check -q .
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prepare
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: fix-*
+          path: work/fix
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: verdict-*
+          path: work/verdicts
+          merge-multiple: true
+      - name: Re-check policy, bundle and sign
+        run: >
+          fixpoint sign --plan work/plan.json --findings work/findings.json --fix-dir work/fix
+          --verdict-dir work/verdicts --run work/run.json --out-dir work/signed
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: signed
+          path: work/signed/
+          if-no-files-found: ignore
+
+  publish:
+    name: publish PRs
+    needs: [prepare, sign]
+    if: ${{ !cancelled() && needs.sign.result == 'success' && needs.prepare.outputs.mode == 'fix' }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_PUBLISH_RUNNER || vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    # Protected environment: holds the write App key; restrict it to the default branch.
+    environment: fixpoint-publish
+    timeout-minutes: 20
+    permissions: {}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --disable-pip-version-check -q .
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: prepare
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed
+          path: work/signed
+      - name: Target owner/name
+        id: target
+        run: |
+          repo="$(python -c 'import json;print(json.load(open("work/run.json"))["repo"])')"
+          echo "owner=${repo%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${repo#*/}" >> "$GITHUB_OUTPUT"
+      - name: Write App token (target repo only)
+        id: write-token
+        if: needs.prepare.outputs.dry_run != 'true'
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2.1.1
+        with:
+          app-id: ${{ vars.FIXPOINT_WRITE_APP_ID }}
+          private-key: ${{ secrets.FIXPOINT_WRITE_APP_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
+      - name: Read App token (dry run)
+        id: read-token
+        if: needs.prepare.outputs.dry_run == 'true'
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2.1.1
+        with:
+          app-id: ${{ vars.FIXPOINT_READ_APP_ID }}
+          private-key: ${{ secrets.FIXPOINT_READ_APP_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
+      - name: Verify signatures, re-check policy + dedupe, publish
+        env:
+          FIXPOINT_WRITE_TOKEN: ${{ steps.write-token.outputs.token }}
+          FIXPOINT_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          FIXPOINT_SIGNER_IDENTITY: https://github.com/${{ github.workflow_ref }}
+          DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+        run: |
+          args=(--bundles work/signed --run work/run.json --out work/publish.json)
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          fixpoint publish "${args[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: publish
+          path: work/publish.json
+          if-no-files-found: ignore
+
+  report:
+    name: report
+    needs: [prepare, fix, verify-ai, verify-build, sign, publish]
+    if: always()
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --disable-pip-version-check -q .
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: prepare
+          path: work
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          pattern: fix-*
+          path: work/fix
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: signed
+          path: work/signed
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: publish
+          path: work
+      - name: Build report
+        run: >
+          fixpoint report --findings work/findings.json --plan work/plan.json --fix-dir work/fix
+          --sign work/signed/sign.json --publish work/publish.json --run work/run.json
+          --out-dir work/report --job-summary
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: fixpoint-report
+          path: work/report/
+          if-no-files-found: warn
+          retention-days: 90

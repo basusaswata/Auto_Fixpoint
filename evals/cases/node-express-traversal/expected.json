@@ -1,0 +1,9 @@
+{
+  "description": "Express: path traversal via sendFile, reflected XSS; one safe twin.",
+  "sast": [
+    {"cwe": ["CWE-22", "CWE-23", "CWE-73"], "file": "server.js", "lines": [7, 10], "oracle": {"file": "server.js", "absent_regex": "sendFile\\(path\\.join\\(PUBLIC, name\\)\\)"}},
+    {"cwe": ["CWE-79", "CWE-80"], "file": "server.js", "lines": [12, 14], "oracle": {"file": "server.js", "absent_regex": "<h1>Hello \\$\\{req\\.query\\.who\\}"}}
+  ],
+  "negatives": [{"file": "server.js", "lines": [16, 18]}],
+  "sca": []
+}

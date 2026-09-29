@@ -1,0 +1,11 @@
+{
+  "_comment": "Numbers from the last accepted skills.lock. A skills upgrade must not regress beyond `tolerance`. Update only in the same PR that bumps skills.lock, with the eval run attached.",
+  "tolerance": 0.05,
+  "metrics": {
+    "discover_precision": 0.0,
+    "discover_recall": 0.0,
+    "fix_rate": 0.0,
+    "build_break_rate": 1.0,
+    "false_fix_rate": 1.0
+  }
+}

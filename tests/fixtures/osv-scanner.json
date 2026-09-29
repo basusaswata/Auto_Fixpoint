@@ -1,0 +1,35 @@
+{
+  "results": [
+    {
+      "source": {"path": "requirements.txt", "type": "lockfile"},
+      "packages": [
+        {
+          "package": {"name": "pyyaml", "version": "5.3", "ecosystem": "PyPI"},
+          "vulnerabilities": [
+            {
+              "id": "GHSA-8q59-q68h-6hv4",
+              "aliases": ["CVE-2020-14343"],
+              "summary": "Improper Input Validation in PyYAML",
+              "database_specific": {"severity": "CRITICAL", "cwe_ids": ["CWE-20"]},
+              "affected": [
+                {"package": {"ecosystem": "PyPI", "name": "pyyaml"},
+                 "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "5.4"}]}]}
+              ]
+            },
+            {
+              "id": "PYSEC-2021-142",
+              "aliases": ["CVE-2020-14343", "GHSA-8q59-q68h-6hv4"],
+              "affected": [
+                {"package": {"ecosystem": "PyPI", "name": "pyyaml"},
+                 "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "5.4"}]}]}
+              ]
+            }
+          ],
+          "groups": [
+            {"ids": ["GHSA-8q59-q68h-6hv4", "PYSEC-2021-142"], "aliases": ["CVE-2020-14343", "GHSA-8q59-q68h-6hv4", "PYSEC-2021-142"], "max_severity": "9.8"}
+          ]
+        }
+      ]
+    }
+  ]
+}

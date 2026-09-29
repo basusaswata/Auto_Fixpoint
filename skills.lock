@@ -1,0 +1,29 @@
+# Pinned AI skills release. Change this file only through a reviewed PR
+# (see docs/SETUP.md "skills.lock release process").
+#
+# source: git      -> fetch `commit` from `repo`, verify the content hash of `paths`.
+# source: release  -> download `asset` from the `tag` release, verify its sha256
+#                     (and `gh attestation verify` when `require_attestation`).
+version: 1
+source: git
+repo: basusaswata/SecCodeAndRevAgent
+ref: main                      # informational; `commit` is what is fetched
+commit: 987a51a225a86d04f71478b20cd53c6e28fdab3c
+paths: ["AISecCore"]
+content_sha256: 6fc1427996fd473a5cc038570c35a20844954481cb2bcbd0abe539f0f955ba05
+require_attestation: false
+# release-mode fields (unused while source=git)
+tag: ""
+asset: ""
+sha256: ""
+
+# Role -> skill name inside the pack. The AISecCore pack ships one review
+# procedure (scgra-reviewer) and topic skills (scgra-*); Fixpoint's prompt
+# templates in prompts/ drive each role and load these skills by name.
+roles:
+  review: scgra-reviewer
+  triage: scgra-reviewer
+  fix_cwe: scgra-0-cwe-prevention
+  fix_cve: scgra-0-supply-chain-security
+  verify: scgra-reviewer
+  discover_sca: scgra-0-supply-chain-security

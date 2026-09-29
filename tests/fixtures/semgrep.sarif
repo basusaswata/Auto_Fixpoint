@@ -1,0 +1,42 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "semanticVersion": "1.95.0",
+          "rules": [
+            {
+              "id": "javascript.express.security.injection.tainted-sql-string.tainted-sql-string",
+              "name": "javascript.express.security.injection.tainted-sql-string.tainted-sql-string",
+              "shortDescription": {"text": "Semgrep Finding: javascript.express.security.injection.tainted-sql-string.tainted-sql-string"},
+              "defaultConfiguration": {"level": "error"},
+              "properties": {
+                "precision": "very-high",
+                "tags": ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')", "HIGH CONFIDENCE", "OWASP-A03:2021 - Injection", "security"]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "javascript.express.security.injection.tainted-sql-string.tainted-sql-string",
+          "level": "error",
+          "message": {"text": "Detected user input used to manually construct a SQL string."},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "src/routes/users.js", "uriBaseId": "%SRCROOT%"},
+                "region": {"startLine": 21, "endLine": 22, "startColumn": 18, "endColumn": 50,
+                           "snippet": {"text": "  const q = \"SELECT * FROM users WHERE id = \" + req.params.id;\n  db.query(q, cb);"}}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
