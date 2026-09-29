@@ -80,17 +80,9 @@ def test_triggers_and_concurrency():
         assert field in on["workflow_dispatch"]["inputs"]
 
 
-@pytest.mark.parametrize("name", ["fixpoint.yml", "reconcile.yml"])
-def test_every_job_starts_with_egress_allowlist(name):
-    doc = load(WF / name)
-    for job_name, job in doc["jobs"].items():
-        first = job["steps"][0]
-        assert first["uses"].startswith("step-security/harden-runner@"), f"{name}:{job_name}"
-        assert "allowed-endpoints" in first["with"]
-        assert "block" in first["with"]["egress-policy"]
-    endpoints = doc["env"]["FIXPOINT_ALLOWED_ENDPOINTS"]
-    for host in ("api.github.com:443", "api.anthropic.com:443", "api.osv.dev:443", "fulcio.sigstore.dev:443"):
-        assert host in endpoints
+def test_no_harden_runner():
+    for path in ALL:
+        assert "harden-runner" not in path.read_text(), path.name
 
 
 def test_hosted_runner_default_and_build_toolchain():

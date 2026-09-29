@@ -52,10 +52,8 @@ In `ai-ssdlc-fixpoint` → Settings:
 | `FIXPOINT_CLAUDE_VERSION` | `2.1.212` | pinned Claude Code version |
 | `FIXPOINT_RUNNER` | `["ubuntu-latest"]` (default) | JSON array of labels |
 | `FIXPOINT_BUILD_RUNNER` | `["ubuntu-latest"]` | optional separate pool for target code |
-| `FIXPOINT_EGRESS_POLICY` | `block` | `audit` to observe first |
-| `FIXPOINT_EXTRA_ENDPOINTS` | `artifactory.example.com:443` | extra allowed hosts |
 | `FIXPOINT_JAVA_VERSION` | `17` | JDK when the repo pins none |
-| `FIXPOINT_PUBLISH_RUNNER` | `["self-hosted","linux","fixpoint-publish"]` | optional hardened pool |
+| `FIXPOINT_PUBLISH_RUNNER` | `["ubuntu-latest"]` | optional separate runner for publish |
 | `FIXPOINT_METRICS_URL` | `https://metrics.example.com/fixpoint` | optional, reconcile POST |
 
 **Repository secrets**
@@ -115,11 +113,15 @@ Hosted runners are ephemeral VMs (one job, then destroyed), which is the isolati
 that touch untrusted code. No caches are used anywhere, so target code can never poison this repo's
 Actions cache.
 
-### Egress allowlist on hosted runners
+### Egress (POC scope)
 
-You cannot firewall a GitHub-hosted VM, so every job starts with
-[`step-security/harden-runner`](https://github.com/step-security/harden-runner) (pinned by SHA) in
-**`block`** mode with the allowlist in `FIXPOINT_ALLOWED_ENDPOINTS` (top of `fixpoint.yml` / `reconcile.yml`):
+This POC runs on plain GitHub-hosted runners and does **not** enforce an egress allowlist: a hosted VM
+cannot be firewalled from the workflow. What limits exposure instead: jobs that hold secrets never run
+target-repo code, the job that runs target code (`verify-build`) holds no secrets or tokens, and every VM
+is destroyed after its job.
+
+Hosts Fixpoint needs, for when you move to an enforced allowlist (self-hosted runners behind a firewall,
+or GitHub-hosted runners with Azure private networking):
 
 | Destination | Purpose |
 |---|---|
@@ -127,28 +129,16 @@ You cannot firewall a GitHub-hosted VM, so every job starts with
 | `api.anthropic.com` | model |
 | `api.osv.dev` | vulnerability data |
 | `fulcio.sigstore.dev`, `rekor.sigstore.dev`, `tuf-repo-cdn.sigstore.dev` | keyless signing / verification |
-| `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`, `registry.yarnpkg.com`, `nodejs.org` | Python / Node packages and runtimes |
+| `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`, `registry.yarnpkg.com`, `nodejs.org` | Python / Node |
 | `repo.maven.apache.org`, `repo1.maven.org`, `services.gradle.org`, `plugins.gradle.org`, `downloads.gradle.org`, `api.adoptium.net` | Java |
 | `proxy.golang.org`, `sum.golang.org`, `go.dev`, `dl.google.com`, `storage.googleapis.com` | Go |
 | `*.archive.ubuntu.com`, `security.ubuntu.com` | apt (git / maven only if missing) |
-
-Variables:
-
-- `FIXPOINT_EGRESS_POLICY`: `block` (default) or `audit`. Use `audit` for a first run if a target repo needs
-  hosts you haven't listed; harden-runner's insights page then shows every destination it called.
-- `FIXPOINT_EXTRA_ENDPOINTS`: space-separated `host:443` entries appended to the list, e.g. a private
-  registry or a Bedrock/Vertex endpoint.
-- `FIXPOINT_DISABLE_SUDO`: `false` by default, because the composite action may `apt-get install` git or Maven.
-
-Trade-off: harden-runner's community tier sends a job's network insights (destinations, not payloads) to
-StepSecurity. If that is not acceptable, use self-hosted runners with a network-level allowlist instead.
 
 ### Alternative: self-hosted runners
 
 Set `FIXPOINT_RUNNER` (and optionally `FIXPOINT_BUILD_RUNNER` / `FIXPOINT_PUBLISH_RUNNER`) to a JSON label list,
 e.g. `["self-hosted","linux","fixpoint-sandbox"]`. Use ephemeral, non-root runners without cloud metadata
-access, enforce the same destinations at the network layer, and set `FIXPOINT_EGRESS_POLICY=audit` (or keep
-harden-runner, which also supports self-hosted). Pre-installing the pinned Claude Code version and your
+access, and enforce the destinations above at the network layer. Pre-installing the pinned Claude Code version and your
 toolchains in the image is optional; the install steps run either way and pin the same versions.
 
 ## 4. Enrol a repo
