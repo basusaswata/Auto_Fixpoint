@@ -12,7 +12,9 @@ A patch is only signed when both verdicts pass for the same patch hash.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -47,6 +49,36 @@ def _static_and_apply(patch: str, repo_dir: Path, policy: Policy, group: dict, m
 
 
 # -- build phase --------------------------------------------------------------
+
+# marker file -> toolchain the build job must install (GitHub-hosted runners start bare)
+TOOLCHAIN = {
+    "package-lock.json": "node", "yarn.lock": "node", "pnpm-lock.yaml": "node", "package.json": "node",
+    "pom.xml": "java", "build.gradle": "java", "build.gradle.kts": "java",
+    "go.mod": "go",
+    "pyproject.toml": "python", "requirements.txt": "python",
+}
+VERSION_FILES = {
+    "node": (".nvmrc", ".node-version"),
+    "java": (".java-version", ".sdkmanrc", ".tool-versions"),
+    "go": ("go.mod",),
+    "python": (".python-version",),
+}
+
+
+def toolchain(repo_dir: Path, policy: Policy) -> dict[str, str]:
+    """Which toolchain verify-build needs, from the same marker the build commands use."""
+    cmds = detect_commands(repo_dir, policy)
+    kind = TOOLCHAIN.get(cmds.marker, "") if cmds else ""
+    version_file = next((f for f in VERSION_FILES.get(kind, ()) if (repo_dir / f).is_file()
+                         and not (repo_dir / f).is_symlink()), "")
+    return {
+        "kind": kind,
+        "marker": cmds.marker if cmds else "",
+        "version_file": str(repo_dir / version_file) if version_file else "",
+        "needs_maven": str(kind == "java" and cmds is not None and cmds.marker == "pom.xml"
+                           and not (repo_dir / "mvnw").is_file()).lower(),
+    }
+
 
 
 def _scrubbed_env(policy: Policy, home: Path) -> dict[str, str]:
@@ -85,6 +117,13 @@ def verify_build(group: dict[str, Any], patch: str, meta: dict[str, Any], repo_d
     prefix = list(cfg.get("sandbox_prefix") or [])
     with tempfile.TemporaryDirectory(prefix="fixpoint-build-home-") as home:
         env = _scrubbed_env(policy, Path(home))
+        if TOOLCHAIN.get(cmds.marker) == "python":
+            # Target deps go into their own venv, never into the interpreter running Fixpoint.
+            venv = Path(home) / "venv"
+            py = shutil.which("python3", path=env["PATH"]) or sys.executable
+            subprocess.run([py, "-m", "venv", str(venv)], check=True, capture_output=True)
+            env["PATH"] = f"{venv / 'bin'}{os.pathsep}{env['PATH']}"
+            env["VIRTUAL_ENV"] = str(venv)
         for step in ("install", "build", "test"):
             argv = getattr(cmds, step)
             if not argv:

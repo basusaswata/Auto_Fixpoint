@@ -152,6 +152,15 @@ def cmd_worktree(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_toolchain(a: argparse.Namespace) -> int:
+    from fixpoint.verify import toolchain
+
+    tc = toolchain(Path(a.repo_dir), _policy(a))
+    _gh_output(**tc)
+    print(json.dumps(tc))
+    return 0
+
+
 def cmd_ingest(a: argparse.Namespace) -> int:
     from fixpoint.ingest import ingest
     from fixpoint.model import save_findings
@@ -381,6 +390,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tar", required=True)
     s.add_argument("--sha", default="HEAD")
     s.set_defaults(fn=cmd_worktree)
+
+    s = sub.add_parser("toolchain", help="report the build toolchain verify-build must install")
+    s.add_argument("--repo-dir", required=True)
+    s.set_defaults(fn=cmd_toolchain)
 
     s = sub.add_parser("ingest", help="REPORT mode: adapt a scanner report")
     s.add_argument("--kind", choices=["sast", "sca"], required=True)

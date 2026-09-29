@@ -78,3 +78,35 @@ def test_triggers_and_concurrency():
     assert "client_payload.repo" in doc["concurrency"]["group"]
     for field in ("repo", "branch", "sast_report", "sast_format", "sca_report", "sca_format", "mode", "max_prs"):
         assert field in on["workflow_dispatch"]["inputs"]
+
+
+@pytest.mark.parametrize("name", ["fixpoint.yml", "reconcile.yml"])
+def test_every_job_starts_with_egress_allowlist(name):
+    doc = load(WF / name)
+    for job_name, job in doc["jobs"].items():
+        first = job["steps"][0]
+        assert first["uses"].startswith("step-security/harden-runner@"), f"{name}:{job_name}"
+        assert "allowed-endpoints" in first["with"]
+        assert "block" in first["with"]["egress-policy"]
+    endpoints = doc["env"]["FIXPOINT_ALLOWED_ENDPOINTS"]
+    for host in ("api.github.com:443", "api.anthropic.com:443", "api.osv.dev:443", "fulcio.sigstore.dev:443"):
+        assert host in endpoints
+
+
+def test_hosted_runner_default_and_build_toolchain():
+    doc = load(WF / "fixpoint.yml")
+    for job in doc["jobs"].values():
+        assert "ubuntu-latest" in job["runs-on"]
+    setup = [s for s in doc["jobs"]["verify-build"]["steps"] if s.get("uses") == "./.github/actions/setup-fixpoint"]
+    assert setup[0]["with"]["toolchain"] == "true" and setup[0]["with"]["install-agent"] == "false"
+
+
+def test_composite_installs_everything():
+    steps = load(ACTION)["runs"]["steps"]
+    uses = " ".join(str(s.get("uses", "")) for s in steps)
+    for action in ("actions/setup-python@", "actions/setup-node@", "actions/setup-java@", "actions/setup-go@"):
+        assert action in uses
+    go = next(s for s in steps if str(s.get("uses", "")).startswith("actions/setup-go@"))
+    assert go["with"]["cache"] is False
+    runs = " ".join(str(s.get("run", "")) for s in steps)
+    assert "npm install -g" in runs and "apt-get install" in runs and "corepack enable" in runs

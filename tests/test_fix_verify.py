@@ -181,3 +181,33 @@ def test_sca_rescan(tmp_path, policy, lock):
     failed = {c["name"] for c in v["checks"] if not c["passed"]}
     assert failed == {"finding-gone", "no-new-vulns"}
     json.dumps(v)  # serialisable
+
+
+def test_toolchain_detection(tmp_path, policy):
+    from fixpoint.verify import toolchain
+
+    (tmp_path / "package.json").write_text("{}")
+    (tmp_path / ".nvmrc").write_text("20\n")
+    tc = toolchain(tmp_path, policy)
+    assert tc["kind"] == "node" and tc["version_file"].endswith(".nvmrc") and tc["needs_maven"] == "false"
+    (tmp_path / "package.json").unlink()
+    (tmp_path / "pom.xml").write_text("<project/>")
+    tc = toolchain(tmp_path, policy)
+    assert tc["kind"] == "java" and tc["needs_maven"] == "true" and tc["version_file"] == ""
+    (tmp_path / "mvnw").write_text("#!/bin/sh\n")
+    assert toolchain(tmp_path, policy)["needs_maven"] == "false"
+    assert toolchain(tmp_path / "empty", policy)["kind"] == ""
+
+
+def test_python_builds_run_in_their_own_venv(tmp_path, policy, lock):
+    repo = sandbox(tmp_path, {"app/db.py": VULN, "requirements.txt": ""})
+    f = sqli()
+    g = group_for(f)
+    rt = ScriptedRuntime({"fix_cwe": [FIX_OK]}, edits={"fix_cwe": {"app/db.py": FIXED, "tests/test_db.py": TEST}})
+    meta = fix.run_fix(g, [f], repo, "r/r", "a" * 40, policy, lock, rt, tmp_path / "o")
+    patch = (tmp_path / "o" / g["id"] / "patch.diff").read_text()
+    probe = "import os, sys; sys.exit(0 if os.environ.get('VIRTUAL_ENV') and sys.prefix != sys.base_prefix else 5)"
+    policy.raw["verify"]["commands"] = [{"marker": "requirements.txt", "install": [], "build": [],
+                                         "test": ["python", "-c", probe]}]
+    v = verify.verify_build(g, patch, meta, repo, policy)
+    assert next(c for c in v["checks"] if c["name"] == "test")["passed"], v["checks"]

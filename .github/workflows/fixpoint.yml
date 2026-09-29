@@ -65,11 +65,28 @@ env:
   FIXPOINT_SKILLS_LOCK: skills.lock
   FIXPOINT_MODEL: ${{ vars.FIXPOINT_MODEL || 'claude-sonnet-5-5' }}
   FIXPOINT_CLAUDE_VERSION: ${{ vars.FIXPOINT_CLAUDE_VERSION || '2.1.212' }}
+  # Egress allowlist enforced by harden-runner on GitHub-hosted runners (docs/SETUP.md).
+  # Set vars.FIXPOINT_EGRESS_POLICY=audit to observe before blocking; add your mirror via
+  # vars.FIXPOINT_EXTRA_ENDPOINTS (space-separated host:443).
+  FIXPOINT_ALLOWED_ENDPOINTS: >-
+    github.com:443 api.github.com:443 codeload.github.com:443 uploads.github.com:443
+    objects.githubusercontent.com:443 raw.githubusercontent.com:443 release-assets.githubusercontent.com:443
+    pipelines.actions.githubusercontent.com:443 results-receiver.actions.githubusercontent.com:443
+    token.actions.githubusercontent.com:443 *.actions.githubusercontent.com:443 *.blob.core.windows.net:443
+    api.anthropic.com:443 api.osv.dev:443
+    fulcio.sigstore.dev:443 rekor.sigstore.dev:443 tuf-repo-cdn.sigstore.dev:443
+    pypi.org:443 files.pythonhosted.org:443 registry.npmjs.org:443 registry.yarnpkg.com:443
+    nodejs.org:443 repo.maven.apache.org:443 repo1.maven.org:443 services.gradle.org:443
+    plugins.gradle.org:443 downloads.gradle.org:443 api.adoptium.net:443
+    proxy.golang.org:443 sum.golang.org:443 storage.googleapis.com:443 go.dev:443 dl.google.com:443
+    azure.archive.ubuntu.com:80 archive.ubuntu.com:80 security.ubuntu.com:80 esm.ubuntu.com:443
+    motd.ubuntu.com:443
+    ${{ vars.FIXPOINT_EXTRA_ENDPOINTS }}
 
 jobs:
   prepare:
     name: pin · findings · align · dedupe · triage · plan
-    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -80,6 +97,12 @@ jobs:
       dry_run: ${{ steps.inputs.outputs.dry_run }}
       sha: ${{ steps.setup.outputs.sha }}
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - name: Checkout Fixpoint
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -179,7 +202,7 @@ jobs:
     name: fix ${{ matrix.group }}
     needs: prepare
     if: needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true'
-    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     permissions: {}
     strategy:
@@ -188,6 +211,12 @@ jobs:
       matrix:
         group: ${{ fromJSON(needs.prepare.outputs.groups) }}
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -218,7 +247,7 @@ jobs:
     name: verify (re-scan) ${{ matrix.group }}
     needs: [prepare, fix]
     if: ${{ !cancelled() && needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true' }}
-    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     permissions: {}
     strategy:
@@ -227,6 +256,12 @@ jobs:
       matrix:
         group: ${{ fromJSON(needs.prepare.outputs.groups) }}
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -262,7 +297,7 @@ jobs:
     needs: [prepare, fix]
     if: ${{ !cancelled() && needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true' }}
     # Target-repo code runs here. This job has no secrets, no GitHub token and no AI.
-    runs-on: ${{ fromJSON(vars.FIXPOINT_BUILD_RUNNER || vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_BUILD_RUNNER || vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 60
     permissions: {}
     strategy:
@@ -271,6 +306,12 @@ jobs:
       matrix:
         group: ${{ fromJSON(needs.prepare.outputs.groups) }}
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -287,6 +328,8 @@ jobs:
         with:
           source: archive
           install-agent: "false"
+          toolchain: "true"
+          java-version: ${{ vars.FIXPOINT_JAVA_VERSION || '17' }}
       - name: Verify (diff rules, install, build, test)
         env:
           GROUP: ${{ matrix.group }}
@@ -304,11 +347,17 @@ jobs:
     name: sign verified patches
     needs: [prepare, fix, verify-ai, verify-build]
     if: ${{ !cancelled() && needs.prepare.outputs.mode == 'fix' && needs.prepare.outputs.has_groups == 'true' }}
-    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     permissions:
       id-token: write   # Sigstore keyless signing only
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -346,12 +395,18 @@ jobs:
     name: publish PRs
     needs: [prepare, sign]
     if: ${{ !cancelled() && needs.sign.result == 'success' && needs.prepare.outputs.mode == 'fix' }}
-    runs-on: ${{ fromJSON(vars.FIXPOINT_PUBLISH_RUNNER || vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_PUBLISH_RUNNER || vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     # Protected environment: holds the write App key; restrict it to the default branch.
     environment: fixpoint-publish
     timeout-minutes: 20
     permissions: {}
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
@@ -413,10 +468,16 @@ jobs:
     name: report
     needs: [prepare, fix, verify-ai, verify-build, sign, publish]
     if: always()
-    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["self-hosted","linux","fixpoint-sandbox"]') }}
+    runs-on: ${{ fromJSON(vars.FIXPOINT_RUNNER || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     permissions: {}
     steps:
+      - name: Egress allowlist
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          egress-policy: ${{ vars.FIXPOINT_EGRESS_POLICY || 'block' }}
+          disable-sudo-and-containers: ${{ vars.FIXPOINT_DISABLE_SUDO || 'false' }}
+          allowed-endpoints: ${{ env.FIXPOINT_ALLOWED_ENDPOINTS }}
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false

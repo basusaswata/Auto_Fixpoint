@@ -150,11 +150,11 @@ verify:
       build: ["go", "build", "./..."]
       test: ["go", "test", "./..."]
     - marker: pyproject.toml
-      install: ["python", "-m", "pip", "install", "-e", ".[test]"]
+      install: ["python", "-m", "pip", "install", "-e", ".[test]", "pytest"]
       build: []
       test: ["python", "-m", "pytest", "-q"]
     - marker: requirements.txt
-      install: ["python", "-m", "pip", "install", "-r", "requirements.txt"]
+      install: ["python", "-m", "pip", "install", "-r", "requirements.txt", "pytest"]
       build: []
       test: ["python", "-m", "pytest", "-q"]
   # Environment variables passed through to install/build/test (e.g. mirror config).

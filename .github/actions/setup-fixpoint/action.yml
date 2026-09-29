@@ -36,6 +36,15 @@ inputs:
   claude-version:
     description: Pinned @anthropic-ai/claude-code version
     default: "2.1.212"
+  node-version:
+    description: Node.js used to run Claude Code
+    default: "20"
+  toolchain:
+    description: Install the target repo's build toolchain (verify-build job only)
+    default: "false"
+  java-version:
+    description: (toolchain) JDK when the repo has no .java-version/.sdkmanrc/.tool-versions
+    default: "17"
 
 outputs:
   sha:
@@ -51,6 +60,18 @@ outputs:
 runs:
   using: composite
   steps:
+    # GitHub-hosted runners: assume nothing beyond the OS. Every tool below is installed here.
+    - name: Base OS tools (git, tar, unzip)
+      shell: bash
+      run: |
+        missing=()
+        for t in git tar unzip; do command -v "$t" >/dev/null || missing+=("$t"); done
+        if [ ${#missing[@]} -gt 0 ]; then
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "${missing[@]}"
+        fi
+        git --version
+
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: "3.11"
@@ -125,18 +146,74 @@ runs:
       run: fixpoint worktree unpack --repo-dir "$REPO_DIR" --tar "$ARCHIVE"
 
     # --- agent runtime + skills ----------------------------------------------------------------
-    - name: Install Claude Code
+    - name: Node.js for Claude Code
+      if: inputs.install-agent == 'true'
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install Claude Code (pinned)
       if: inputs.install-agent == 'true'
       shell: bash
       env:
         CLAUDE_VERSION: ${{ inputs.claude-version }}
       run: |
-        if ! command -v claude >/dev/null || [ "$(claude --version | awk '{print $1}')" != "$CLAUDE_VERSION" ]; then
-          npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
-        fi
+        npm install -g --no-fund --no-audit "@anthropic-ai/claude-code@${CLAUDE_VERSION}"
         claude --version
 
     - name: Install pinned skills (checksum verified)
       if: inputs.install-agent == 'true'
       shell: bash
       run: fixpoint skills install --home "$FIXPOINT_AGENT_HOME"
+
+    # --- target build toolchain (verify-build only; no secrets exist in that job) -------------
+    - name: Detect build toolchain
+      id: tc
+      if: inputs.toolchain == 'true'
+      shell: bash
+      env:
+        REPO_DIR: ${{ inputs.repo-dir }}
+      run: fixpoint toolchain --repo-dir "$REPO_DIR"
+
+    - name: Node.js toolchain
+      if: inputs.toolchain == 'true' && steps.tc.outputs.kind == 'node'
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ steps.tc.outputs.version_file == '' && '20' || '' }}
+        node-version-file: ${{ steps.tc.outputs.version_file }}
+
+    - name: Enable corepack (yarn / pnpm)
+      if: inputs.toolchain == 'true' && steps.tc.outputs.kind == 'node'
+      shell: bash
+      run: corepack enable
+
+    - name: Java toolchain
+      if: inputs.toolchain == 'true' && steps.tc.outputs.kind == 'java'
+      uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      with:
+        distribution: temurin
+        java-version: ${{ steps.tc.outputs.version_file == '' && inputs.java-version || '' }}
+        java-version-file: ${{ steps.tc.outputs.version_file }}
+
+    - name: Maven (repo has no ./mvnw)
+      if: inputs.toolchain == 'true' && steps.tc.outputs.needs_maven == 'true'
+      shell: bash
+      run: |
+        command -v mvn >/dev/null || {
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends maven
+        }
+        mvn -v
+
+    - name: Go toolchain
+      if: inputs.toolchain == 'true' && steps.tc.outputs.kind == 'go'
+      uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+      with:
+        go-version-file: ${{ steps.tc.outputs.version_file }}
+        cache: false   # never let target code write to this repo's Actions cache
+
+    - name: Python toolchain (repo pins a version)
+      if: inputs.toolchain == 'true' && steps.tc.outputs.kind == 'python' && steps.tc.outputs.version_file != ''
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      with:
+        python-version-file: ${{ steps.tc.outputs.version_file }}
