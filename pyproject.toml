@@ -21,6 +21,10 @@ fixpoint = "fixpoint.cli:main"
 [tool.setuptools.packages.find]
 include = ["fixpoint*"]
 
+# Prompt and PR templates must ship with the package: the workflow uses `pip install .`
+[tool.setuptools.package-data]
+fixpoint = ["prompts/*.md", "templates/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

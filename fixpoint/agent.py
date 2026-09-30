@@ -29,13 +29,13 @@ from typing import Any, Protocol
 
 from fixpoint import log
 from fixpoint.jsonschema_lite import ValidationError, validate
+from fixpoint.prompts import PROMPTS_DIR
 
 LOG = log.get(__name__)
 
 READ_TOOLS = ["Read", "Grep", "Glob", "Skill"]
 EDIT_TOOLS = ["Edit", "Write"]
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 # Environment passed to the agent process. Everything else is dropped.
 BASE_ENV = ("PATH", "LANG", "LC_ALL", "TZ", "TMPDIR")

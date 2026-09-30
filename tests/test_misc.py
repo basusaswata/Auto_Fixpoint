@@ -37,3 +37,24 @@ def test_schema_validator():
         except ValidationError:
             continue
         raise AssertionError(f"accepted {bad}")
+
+
+def test_prompts_and_templates_ship_as_package_data():
+    """The workflow uses a plain `pip install .`: resources must live inside the package and be declared."""
+    import re
+    import tomllib
+    from pathlib import Path
+
+    import fixpoint
+    from fixpoint import agent, prbody, prompts
+
+    pkg = Path(fixpoint.__file__).resolve().parent
+    assert prompts.PROMPTS_DIR.parent == pkg and prbody.TEMPLATE.parent.parent == pkg
+    for name in ("discover-sast", "discover-sca", "triage", "fix-cwe", "fix-cve", "verify", "guardrail"):
+        assert (prompts.PROMPTS_DIR / f"{name}.md").is_file(), name
+    assert agent.guardrail_prompt() and prbody.TEMPLATE.is_file()
+    root = pkg.parent
+    data = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["setuptools"]["package-data"]["fixpoint"]
+    assert "prompts/*.md" in data and "templates/*.md" in data
+    for py in pkg.rglob("*.py"):  # no module may reach outside the package for resources
+        assert not re.search(r"parent\.parent\s*/\s*\"(prompts|templates)\"", py.read_text()), py

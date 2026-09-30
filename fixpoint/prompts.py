@@ -9,7 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from string import Template
 
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
+# Shipped inside the package (package data), so it works after a plain `pip install .`
+PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
 
 def render(name: str, **values: object) -> str:

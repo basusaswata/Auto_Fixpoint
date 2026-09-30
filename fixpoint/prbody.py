@@ -9,7 +9,7 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
-TEMPLATE = Path(__file__).resolve().parent.parent / "templates" / "pr_body.md"
+TEMPLATE = Path(__file__).resolve().parent / "templates" / "pr_body.md"  # package data
 
 FINDINGS_RE = re.compile(r"<!--\s*fixpoint-findings:\s*([A-Za-z0-9_,\s-]*?)\s*-->")
 META_RE = re.compile(r"<!--\s*fixpoint-meta:\s*([A-Za-z0-9+/=]+)\s*-->")

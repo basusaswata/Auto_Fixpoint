@@ -84,17 +84,17 @@ The pinned pack is `basusaswata/SecCodeAndRevAgent` (AISecCore). It is fetched a
 its content hash is verified, and it is installed into the agent's private `~/.claude/skills/<id>/SKILL.md`
 (the raw pack is also available read-only at `~/.claude/fixpoint-skills`). The pack contains one review
 procedure (`scgra-reviewer`) plus 24 topic skills (`scgra-0-*`, `scgra-1-*`); there are no separate triage /
-remediation / verify skills, so each role is driven by a Fixpoint prompt template (`prompts/`) that loads the
+remediation / verify skills, so each role is driven by a Fixpoint prompt template (`fixpoint/prompts/`) that loads the
 role's skill and the topic skill named in the finding:
 
 | Role | Skill (skills.lock) | Prompt |
 |---|---|---|
-| review (DISCOVER SAST) | `scgra-reviewer` | `prompts/discover-sast.md` |
-| discover_sca (inventory) | `scgra-0-supply-chain-security` | `prompts/discover-sca.md` |
-| triage | `scgra-reviewer` | `prompts/triage.md` |
-| fix_cwe | `scgra-0-cwe-prevention` | `prompts/fix-cwe.md` |
-| fix_cve | `scgra-0-supply-chain-security` | `prompts/fix-cve.md` |
-| verify | `scgra-reviewer` | `prompts/verify.md` |
+| review (DISCOVER SAST) | `scgra-reviewer` | `fixpoint/prompts/discover-sast.md` |
+| discover_sca (inventory) | `scgra-0-supply-chain-security` | `fixpoint/prompts/discover-sca.md` |
+| triage | `scgra-reviewer` | `fixpoint/prompts/triage.md` |
+| fix_cwe | `scgra-0-cwe-prevention` | `fixpoint/prompts/fix-cwe.md` |
+| fix_cve | `scgra-0-supply-chain-security` | `fixpoint/prompts/fix-cve.md` |
+| verify | `scgra-reviewer` | `fixpoint/prompts/verify.md` |
 
 When dedicated skills ship, change the names in `skills.lock`; nothing else changes.
 

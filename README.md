@@ -15,8 +15,8 @@ Target repos get no workflow files and no changes other than those PRs.
 .github/workflows/reconcile.yml    scheduled outcome loop
 .github/workflows/ci.yml           lint + unit tests
 fixpoint/                          Python 3.11 package, CLI `fixpoint`
-prompts/                           role prompt templates + guardrail
-templates/pr_body.md               PR body
+fixpoint/prompts/                  role prompt templates + guardrail
+fixpoint/templates/pr_body.md      PR body
 policy/policy.yaml                 limits, forbidden paths, thresholds, branch rules, verify commands
 skills.lock                        pinned skills pack + role → skill map
 tests/                             unit tests (agent and GitHub mocked, no network)
