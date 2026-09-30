@@ -5,7 +5,7 @@ version: 1
 
 # Repos Fixpoint may touch. Runs against any other repo fail at the pin stage.
 enrolled_repos:
-  - basusaswata/fixpoint-demo-app
+  - basusaswata/VulnBankAPI
   # - <org>/<repo>
 
 limits:
