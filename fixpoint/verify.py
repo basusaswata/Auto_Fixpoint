@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from fixpoint import diffutil, log, prompts, rules, schemas, worktree
+from fixpoint import diffutil, log, prompts, rules, scanners, schemas, worktree
 from fixpoint.agent import AgentError, AgentRequest, AgentRuntime, skills_dir, wrap_untrusted
 from fixpoint.config import Policy, SkillsLock
 from fixpoint.fix import detect_commands
@@ -177,6 +177,14 @@ def verify_rescan(group: dict[str, Any], findings: list[Finding], patch: str, me
     if group["kind"] == "sca":
         osv = osv or OsvClient(policy.discover["sca"].get("osv_api", "https://api.osv.dev"))
         checks += _osv_rescan(group, meta, repo_dir, osv)
+        if str(group.get("source", "")).startswith("scanner:osv-scanner") and scanners.binary("osv-scanner"):
+            # Same scanner, patched tree: proves the override/upgrade actually took effect in resolution.
+            try:
+                ok, detail = scanners.osv_rescan(repo_dir, policy, group["package"]["name"],
+                                                 {c.upper() for c in group.get("cve") or []})
+            except scanners.ScannerError as e:
+                ok, detail = False, f"osv-scanner re-scan failed: {e}"
+            checks.append(check("osv-scanner-rescan", ok, detail))
     skill = lock.skill("verify")
     blocks = "\n\n".join(finding_context(f, repo_dir, int(policy.triage.get("context_lines", 25))) for f in findings)
     prompt = prompts.render("verify", skill=skill, repo=repo, sha=sha, findings=blocks,

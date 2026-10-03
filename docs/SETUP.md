@@ -48,6 +48,8 @@ change the workflow can use the App key.
 | Python 3.11 + `fixpoint` CLI (`pyyaml`, `requests`) | `actions/setup-python` + `pip install .` |
 | Node.js 20 + Claude Code `FIXPOINT_CLAUDE_VERSION` | `actions/setup-node` + `npm install -g` |
 | AISecCore skills (commit + hash from `skills.lock`) | `fixpoint skills install` |
+| Semgrep CE `SEMGREP_VERSION` (only with `scan_engine: scanner`) | `pip install` into its own venv |
+| OSV-Scanner `OSV_SCANNER_VERSION` (only with `scan_engine: scanner`) | release binary from GitHub, `sha256sum -c` against `OSV_SCANNER_SHA256` |
 | Target build toolchain (only in `mode: fix` with planned fixes) | `fixpoint toolchain` + the matching setup action |
 
 Build toolchain per marker file (versions from the repo's own files when present):
@@ -81,10 +83,19 @@ Hosts the job contacts, for when you move to an enforced allowlist:
 | `github.com`, `api.github.com`, `codeload.github.com`, `*.githubusercontent.com`, `*.actions.githubusercontent.com`, `*.blob.core.windows.net` | Actions runtime, artifacts, API, action + tool downloads |
 | `api.anthropic.com` | model |
 | `api.osv.dev` | vulnerability data |
+| `semgrep.dev` | Semgrep rulesets (scanner mode) |
+| `api.deps.dev`, `repo.maven.apache.org` | OSV-Scanner transitive dependency resolution (scanner mode) |
 | `pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`, `registry.yarnpkg.com`, `nodejs.org` | Python / Node |
 | `repo.maven.apache.org`, `repo1.maven.org`, `services.gradle.org`, `plugins.gradle.org`, `downloads.gradle.org`, `api.adoptium.net` | Java |
 | `proxy.golang.org`, `sum.golang.org`, `go.dev`, `dl.google.com`, `storage.googleapis.com` | Go |
 | `*.archive.ubuntu.com`, `security.ubuntu.com` | apt (git / maven only if missing) |
+
+### Upgrading the scanners
+
+Versions are pinned in the job `env` of `.github/workflows/fixpoint.yml`. To upgrade OSV-Scanner, change
+`OSV_SCANNER_VERSION` and set `OSV_SCANNER_SHA256` to the `osv-scanner_linux_amd64` line of that release's
+`osv-scanner_SHA256SUMS` file; a mismatch fails the run before the binary can execute. For Semgrep, change
+`SEMGREP_VERSION`. Rulesets and excludes are under `scanners:` in `policy/policy.yaml`.
 
 ## 4. Enrol a repo
 

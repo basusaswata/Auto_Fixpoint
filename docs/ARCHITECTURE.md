@@ -19,10 +19,12 @@ flowchart TD
     SK --> SAST{sast_report?}
     SK --> SCA{sca_report?}
     SAST -- yes --> ING1[ingest: SARIF]
-    SAST -- no --> DS[AI scan: review skill]
+    SAST -- no, scan_engine=scanner --> SG[Semgrep CE -> SARIF]
+    SAST -- no, scan_engine=ai --> DS[AI scan: review skill]
     SCA -- yes --> ING2[ingest: Snyk / OSV / SARIF]
-    SCA -- no --> DC[AI inventory + OSV API]
-    ING1 & DS & ING2 & DC --> AL[align]
+    SCA -- no, scan_engine=scanner --> OS[OSV-Scanner -> JSON]
+    SCA -- no, scan_engine=ai --> DC[AI inventory + OSV API]
+    ING1 & SG & DS & ING2 & OS & DC --> AL[align]
     AL --> DD[dedupe: existing Fixpoint PRs]
     DD --> REV[revoke token #1]
     REV --> TR[triage: AI + policy override]
@@ -42,7 +44,8 @@ flowchart TD
 | Step | AI | Runs target code | Token in env | Model key in env |
 |---|---|---|---|---|
 | inputs, pin, checkout, neutralise, skills | no | no | token #1 (pin, checkout) | no |
-| SAST / SCA AI scan | yes | no | no | yes |
+| SAST / SCA AI scan (`scan_engine=ai`) | yes | no | no | yes |
+| install scanners, Semgrep / OSV-Scanner scan (`scan_engine=scanner`) | no | no (read only) | no | no |
 | ingest, align | no | no | no | no |
 | dedupe | no | no | token #1 | no |
 | revoke token #1 | no | no | token #1 (to revoke it) | no |

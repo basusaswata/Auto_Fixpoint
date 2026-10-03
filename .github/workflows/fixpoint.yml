@@ -4,8 +4,9 @@
 #   -> install tools (Python, Node, Claude Code)
 #   -> pin branch, check out target, strip agent config
 #   -> fetch + verify pinned skills from the skills repo
-#   -> findings: ingest the report if given, otherwise AI scan (SAST: review skill,
-#      SCA: skill inventory confirmed by OSV)
+#   -> findings, per scan type: the supplied report, else
+#        scan_engine=scanner: open-source scanners (SAST: Semgrep, SCA: OSV-Scanner)
+#        scan_engine=ai:      AI scan (SAST: review skill, SCA: skill inventory confirmed by OSV)
 #   -> align, dedupe, triage, plan
 #   -> fix + AI-verify every group, then install/build/test every patch
 #   -> raise the PRs (mode=fix)
@@ -27,8 +28,13 @@ on:
         type: choice
         options: [review, fix]
         default: review
+      scan_engine:
+        description: "When no report is supplied: ai = AI analyses the codebase · scanner = run Semgrep (SAST) + OSV-Scanner (SCA)"
+        type: choice
+        options: [ai, scanner]
+        default: ai
       sast_report:
-        description: SAST report (https URL, or a path inside the target repo). Empty = AI scan
+        description: SAST report (https URL, or a path inside the target repo). Empty = use scan_engine
         required: false
         default: ""
       sast_format:
@@ -37,7 +43,7 @@ on:
         options: [auto, sarif]
         default: auto
       sca_report:
-        description: SCA report (https URL, or a path inside the target repo). Empty = AI scan + OSV
+        description: SCA report (https URL, or a path inside the target repo). Empty = use scan_engine
         required: false
         default: ""
       sca_format:
@@ -75,6 +81,10 @@ jobs:
       FIXPOINT_SKILLS_LOCK: skills.lock
       FIXPOINT_MODEL: ${{ vars.FIXPOINT_MODEL || 'claude-sonnet-5-5' }}
       CLAUDE_VERSION: ${{ vars.FIXPOINT_CLAUDE_VERSION || '2.1.212' }}
+      # Pinned open-source scanners (scan_engine=scanner). Bump version + checksum together.
+      SEMGREP_VERSION: "1.179.0"
+      OSV_SCANNER_VERSION: "2.6.0"
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108   # osv-scanner_linux_amd64
       W: work          # all stage outputs
       T: target        # target repo checkout
     steps:
@@ -116,7 +126,24 @@ jobs:
           FP_MAX_PRS: ${{ github.event.inputs.max_prs || github.event.client_payload.max_prs }}
           FP_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run }}
           FP_ACTOR: ${{ github.event.client_payload.requested_by || github.triggering_actor || github.actor }}
+          FP_SCAN_ENGINE: ${{ github.event.inputs.scan_engine || github.event.client_payload.scan_engine }}
         run: fixpoint inputs --out "$W/run.json"
+
+      - name: Install scanners (Semgrep, OSV-Scanner)
+        if: steps.inputs.outputs.scan_engine == 'scanner' && (steps.inputs.outputs.sast_report == '' || steps.inputs.outputs.sca_report == '')
+        run: |
+          # Semgrep CE in its own venv, so its dependencies never touch Fixpoint's
+          python -m venv "$RUNNER_TEMP/semgrep-venv"
+          "$RUNNER_TEMP/semgrep-venv/bin/pip" install --disable-pip-version-check -q "semgrep==${SEMGREP_VERSION}"
+          echo "FIXPOINT_SEMGREP_BIN=$RUNNER_TEMP/semgrep-venv/bin/semgrep" >> "$GITHUB_ENV"
+          # OSV-Scanner: official release binary, checksum-verified before it is made executable
+          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          echo "FIXPOINT_OSV_SCANNER_BIN=$RUNNER_TEMP/osv-scanner" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" --version
+          "$RUNNER_TEMP/osv-scanner" --version
 
       - name: App token for the target repo (checkout + dedupe; revoked before any build)
         id: read-token
@@ -159,8 +186,12 @@ jobs:
           FORMAT: ${{ github.event.inputs.sast_format || github.event.client_payload.sast_format || 'auto' }}
         run: fixpoint ingest --kind sast --report "$REPORT" --format "$FORMAT" --base-dir "$T" --out "$W/sast.json"
 
+      - name: SAST - scanner (Semgrep)
+        if: steps.inputs.outputs.sast_report == '' && steps.inputs.outputs.scan_engine == 'scanner'
+        run: fixpoint scan --kind sast --repo-dir "$T" --run "$W/run.json" --out "$W/sast.json"
+
       - name: SAST - AI scan (review skill)
-        if: steps.inputs.outputs.sast_report == ''
+        if: steps.inputs.outputs.sast_report == '' && steps.inputs.outputs.scan_engine != 'scanner'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
         run: fixpoint discover --kind sast --repo-dir "$T" --run "$W/run.json" --out "$W/sast.json"
@@ -172,8 +203,12 @@ jobs:
           FORMAT: ${{ github.event.inputs.sca_format || github.event.client_payload.sca_format || 'auto' }}
         run: fixpoint ingest --kind sca --report "$REPORT" --format "$FORMAT" --base-dir "$T" --out "$W/sca.json"
 
+      - name: SCA - scanner (OSV-Scanner)
+        if: steps.inputs.outputs.sca_report == '' && steps.inputs.outputs.scan_engine == 'scanner'
+        run: fixpoint scan --kind sca --repo-dir "$T" --run "$W/run.json" --out "$W/sca.json"
+
       - name: SCA - AI inventory + OSV lookup
-        if: steps.inputs.outputs.sca_report == ''
+        if: steps.inputs.outputs.sca_report == '' && steps.inputs.outputs.scan_engine != 'scanner'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
         run: fixpoint discover --kind sca --repo-dir "$T" --run "$W/run.json" --out "$W/sca.json"

@@ -55,6 +55,9 @@ def validate_inputs(raw: dict[str, Any]) -> dict[str, Any]:
     mode = str(raw.get("mode") or "review").strip()
     if mode not in ("review", "fix"):
         raise InputError("mode must be review or fix")
+    scan_engine = str(raw.get("scan_engine") or "ai").strip() or "ai"
+    if scan_engine not in ("ai", "scanner"):
+        raise InputError("scan_engine must be ai or scanner")
     max_prs_raw = str(raw.get("max_prs") or "").strip()
     if max_prs_raw and not re.match(r"^\d{1,3}$", max_prs_raw):
         raise InputError("max_prs must be a non-negative integer")
@@ -62,6 +65,7 @@ def validate_inputs(raw: dict[str, Any]) -> dict[str, Any]:
         "repo": repo,
         "branch": branch,
         "mode": mode,
+        "scan_engine": scan_engine,
         "max_prs": int(max_prs_raw) if max_prs_raw else None,
         "dry_run": str(raw.get("dry_run") or "").lower() in ("1", "true", "yes"),
     }

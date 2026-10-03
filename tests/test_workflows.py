@@ -84,13 +84,37 @@ def test_self_sufficient_install():
     assert "fixpoint skills install" in step(steps, "Fetch pinned skills")["run"]
 
 
-def test_report_or_ai_scan():
-    _, steps = main_steps()
+def test_report_or_scanner_or_ai():
+    """Per scan type exactly one source runs: supplied report > scanner (scan_engine=scanner) > AI."""
+    doc, steps = main_steps()
+    on = doc.get("on") or doc.get(True)
+    engine = on["workflow_dispatch"]["inputs"]["scan_engine"]
+    assert engine["options"] == ["ai", "scanner"] and engine["default"] == "ai"
     for kind in ("SAST", "SCA"):
         ingest = step(steps, f"{kind} - ingest report")
-        scan = next(s for s in steps if s.get("name", "").startswith(f"{kind} - AI"))
-        assert "!= ''" in ingest["if"] and "== ''" in scan["if"]
-        assert "ANTHROPIC_API_KEY" in scan["env"] and "ANTHROPIC_API_KEY" not in ingest.get("env", {})
+        scanner = step(steps, f"{kind} - scanner")
+        ai = next(s for s in steps if s.get("name", "").startswith(f"{kind} - AI"))
+        assert "!= ''" in ingest["if"]
+        assert "== ''" in scanner["if"] and "scan_engine == 'scanner'" in scanner["if"]
+        assert "== ''" in ai["if"] and "scan_engine != 'scanner'" in ai["if"]
+        assert "fixpoint scan --kind" in scanner["run"]
+        assert "ANTHROPIC_API_KEY" in ai["env"]
+        assert "env" not in scanner and "ANTHROPIC_API_KEY" not in ingest.get("env", {})
+
+
+def test_scanner_install_is_pinned_and_verified():
+    doc, steps = main_steps()
+    env = doc["jobs"]["fixpoint"]["env"]
+    assert re.match(r"^\d+\.\d+\.\d+$", env["SEMGREP_VERSION"]) and re.match(r"^\d+\.\d+\.\d+$", env["OSV_SCANNER_VERSION"])
+    assert re.match(r"^[0-9a-f]{64}$", env["OSV_SCANNER_SHA256"])
+    install = step(steps, "Install scanners")
+    assert "scan_engine == 'scanner'" in install["if"] and "env" not in install
+    run = install["run"]
+    assert 'semgrep==${SEMGREP_VERSION}' in run and "semgrep-venv" in run
+    assert "releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" in run
+    assert run.index("sha256sum -c") < run.index("chmod +x")  # verified before it can run
+    names = [s.get("name", "") for s in steps]
+    assert names.index(install["name"]) < names.index("SAST - scanner (Semgrep)")
 
 
 def test_secret_scoping_inside_the_job():

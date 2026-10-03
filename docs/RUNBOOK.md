@@ -16,9 +16,21 @@ gh api repos/<org>/ai-ssdlc-fixpoint/dispatches -f event_type=fixpoint-sweep \
   -F client_payload[mode]=fix -F client_payload[max_prs]=2 -F client_payload[requested_by]=<login>
 ```
 
-Inputs: `repo`, `branch` (required); `sast_report`, `sca_report` (https URL or a path in the Fixpoint
-workspace; empty = DISCOVER), `sast_format` (`auto|sarif`), `sca_format` (`auto|snyk|osv|sarif`), `mode`
-(`review|fix`), `max_prs`, `dry_run`. One run per repo+branch at a time; later ones queue.
+Inputs: `repo`, `branch` (required); `mode` (`review|fix`); `scan_engine` (`ai|scanner`);
+`sast_report`, `sca_report` (https URL or a path inside the target repo), `sast_format` (`auto|sarif`),
+`sca_format` (`auto|snyk|osv|sarif`); `max_prs`, `dry_run`. One run per repo+branch at a time; later ones queue.
+
+Where findings come from, decided separately for SAST and SCA:
+
+| Report supplied? | `scan_engine` | SAST | SCA |
+|---|---|---|---|
+| yes | (ignored) | the report (SARIF) | the report (Snyk / OSV / SARIF) |
+| no | `ai` (default) | AI review skill reads the code | AI lists dependencies, OSV API confirms |
+| no | `scanner` | **Semgrep CE** (`p/default` + `p/owasp-top-ten`) | **OSV-Scanner** (resolves transitive deps) |
+
+Remediation is the same for all of them: triage, plan, fix, verify, build/test and PR. In scanner mode the
+raw outputs (`semgrep.sarif`, `osv-scanner.json`) are in the `fixpoint-results` artifact, and dependency
+fixes are re-checked by running OSV-Scanner again on the patched code.
 
 Local, without GitHub (skills installed in `FIXPOINT_AGENT_HOME`, `ANTHROPIC_API_KEY` set):
 ```bash

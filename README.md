@@ -1,6 +1,7 @@
 # Fixpoint (ai-ssdlc-fixpoint)
 
-Out-of-band AI review → fix → PR engine. Fixpoint reviews a target repository for security flaws,
+Out-of-band AI review → fix → PR engine. Fixpoint reviews a target repository for security flaws (with
+the AI, open-source scanners Semgrep + OSV-Scanner, or a report you supply),
 fixes them with the pinned [AISecCore skills](https://github.com/basusaswata/SecCodeAndRevAgent), proves
 each fix (diff rules, OSV re-scan, independent verify skill, build + tests), and raises a PR, all in one
 self-sufficient GitHub Actions job.
@@ -32,5 +33,5 @@ python3.11 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 ```
 
 Each stage is a CLI subcommand that reads and writes JSON:
-`inputs, pin, skills, neutralise, worktree, toolchain, ingest, discover, align, dedupe, triage, plan, fix,
+`inputs, pin, skills, neutralise, worktree, toolchain, ingest, discover, scan, align, dedupe, triage, plan, fix,
 verify, fix-all, build-all, sign, publish, report, record, local`. `fixpoint <cmd> --help` for arguments.

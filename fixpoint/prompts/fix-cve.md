@@ -4,6 +4,8 @@ apply its guidance on safe upgrades.
 Upgrade `${package}` (${ecosystem}) from `${current_version}` to exactly `${target_version}` in
 `${manifest}`, which fixes: ${vulns}.
 
+${dependency_note}
+
 1. Change the version in the manifest. If a lockfile sits next to it, update the entries for this
    package consistently (version, resolved URL and integrity hash only when you can derive them
    exactly from the lockfile format; otherwise leave the lockfile untouched and say so in `notes`).

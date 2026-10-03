@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 from pathlib import Path
 
 from fixpoint import log
@@ -90,7 +91,10 @@ def align_sca(f: Finding, repo: Path, manifests: list[str] | None = None) -> Non
         f.status, f.reasoning = "unlocatable", "no package information"
         return
     name = pkg.name.split(":")[-1]
-    candidates = [normalise_path(pkg.manifest)] if pkg.manifest else []
+    # whole-token match: "h2" must not match "com.h2database", "spring-web" not "spring-webmvc"
+    name_re = re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w.-])")
+    own = normalise_path(pkg.manifest) if pkg.manifest else ""
+    candidates = [own] if own else []
     candidates += [m for m in manifests or [] if m not in candidates]
     for rel in candidates:
         if not rel or not is_safe_relpath(rel):
@@ -98,23 +102,38 @@ def align_sca(f: Finding, repo: Path, manifests: list[str] | None = None) -> Non
         p = repo / rel
         if not p.is_file() or p.is_symlink():
             continue
-        text = p.read_text(encoding="utf-8", errors="replace")
-        if name not in text:
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        hits = [i for i, ln in enumerate(lines) if name_re.search(ln)]
+        if not hits:
             continue
-        if pkg.version and pkg.version not in text:
-            if rel == normalise_path(pkg.manifest):
+        # The version may sit on the same line (requirements.txt) or a few lines below (pom.xml).
+        # Never read past the end of this dependency block into the next one.
+        window = {i: re.split(r"</(dependency|plugin|parent)>", "\n".join(lines[i : i + 4]))[0] for i in hits}
+        exact = [i for i in hits if pkg.version and pkg.version in window[i]]
+        pinned_other = [i for i in hits if re.search(r"\d+\.\d+", window[i]) and i not in exact]
+        if exact:
+            at = exact[0]
+        elif pinned_other:
+            if rel == own:
                 f.status, f.reasoning = "stale", f"{pkg.name}@{pkg.version} no longer in {rel}"
                 return
             continue
+        else:
+            at = hits[0]  # declared without a version: managed by a parent / BOM
+            f.properties["managed"] = True
+            f.notes.append(f"{pkg.name} is declared in {rel} without a version (managed by a parent/BOM)")
         pkg.manifest = rel
         f.location.file = rel
-        for i, line in enumerate(text.splitlines(), 1):
-            if name in line and (not pkg.version or pkg.version in line):
-                f.location.start_line = f.location.end_line = i
-                f.location.snippet = line.strip()[:500]
-                break
+        f.location.start_line = f.location.end_line = at + 1
+        f.location.snippet = lines[at].strip()[:500]
         return
-    if pkg.manifest and not (repo / normalise_path(pkg.manifest)).exists():
+    if own and (repo / own).is_file() and re.match(r"^(scanner|report):", f.source):
+        # A scanner resolved it through the dependency tree: a transitive dependency.
+        f.properties["transitive"] = True
+        f.location.file = own
+        f.notes.append(f"{pkg.name}@{pkg.version} is a transitive dependency of {own} (not declared directly)")
+        return
+    if own and not (repo / own).exists():
         f.status, f.reasoning = "stale", f"manifest {pkg.manifest} no longer exists"
     else:
         f.status, f.reasoning = "unlocatable", f"{pkg.name} not found in any manifest"

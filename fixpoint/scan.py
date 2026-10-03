@@ -8,15 +8,13 @@ SCA:  engine ``skill`` - the supply-chain skill inventories manifests, then ever
 
 from __future__ import annotations
 
-import json
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fixpoint import adapters, log, prompts, schemas
+from fixpoint import log, prompts, schemas
 from fixpoint.agent import AgentError, AgentRequest, AgentRuntime, skills_dir, wrap_untrusted
 from fixpoint.config import Policy, SkillsLock, any_glob, glob_match
 from fixpoint.model import Evidence, Finding, Location, is_safe_relpath, merge_findings, normalise_path
@@ -244,27 +242,20 @@ def discover_sca_skill(repo_dir: Path, repo: str, sha: str, policy: Policy, lock
     return ScanResult(merge_findings(found), meta)
 
 
-def discover_sca_osv_scanner(repo_dir: Path) -> ScanResult:
-    binary = shutil.which("osv-scanner")
+def discover_sca_osv_scanner(repo_dir: Path, policy: Policy) -> ScanResult:
+    from fixpoint import scanners  # local import: scanners imports this module
+
     meta: dict[str, Any] = {"sca_mode": "discover", "sca_engine": "osv-scanner", "discover_errors": []}
-    if not binary:
-        meta["discover_errors"].append("osv-scanner not installed")
+    try:
+        found = scanners.sca_findings(scanners.run_osv_scanner(repo_dir, policy), repo_dir)
+    except scanners.ScannerError as e:
+        meta["discover_errors"].append(str(e))
         return ScanResult([], meta)
-    r = subprocess.run([binary, "scan", "source", "-r", "--format", "json", "."], cwd=repo_dir,
-                       capture_output=True, text=True, timeout=1800, check=False)
-    if r.returncode not in (0, 1):
-        meta["discover_errors"].append(f"osv-scanner exit {r.returncode}")
-        return ScanResult([], meta)
-    doc = json.loads(r.stdout or '{"results": []}')
-    found = adapters.parse(doc, "osv", "sca")
-    for f in found:
-        f.source = "discover:osv-scanner"
-        f.properties["osv_confirmed"] = True
-    return ScanResult(merge_findings(found), meta)
+    return ScanResult(found, meta)
 
 
 def discover_sca(repo_dir: Path, repo: str, sha: str, policy: Policy, lock: SkillsLock,
                  runtime: AgentRuntime, osv: OsvClient | None = None) -> ScanResult:
     if policy.discover["sca"].get("engine", "skill") == "osv-scanner":
-        return discover_sca_osv_scanner(repo_dir)
+        return discover_sca_osv_scanner(repo_dir, policy)
     return discover_sca_skill(repo_dir, repo, sha, policy, lock, runtime, osv)

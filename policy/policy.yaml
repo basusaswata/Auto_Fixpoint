@@ -102,6 +102,19 @@ discover:
     max_budget_usd: 3.0
     manifests: ["package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "requirements.txt", "requirements*.txt", "Pipfile.lock", "poetry.lock", "pyproject.toml", "go.mod", "go.sum", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile.lock", "composer.lock", "Cargo.lock"]
 
+# Open-source scanners, used when a run sets scan_engine=scanner (instead of the AI scan).
+# The workflow installs them at pinned versions; see SEMGREP_VERSION / OSV_SCANNER_* in fixpoint.yml.
+scanners:
+  semgrep:
+    # Semgrep registry rulesets (fetched from semgrep.dev at scan time).
+    configs: ["p/default", "p/owasp-top-ten"]
+    exclude: ["node_modules", "vendor", "dist", "build", "target", ".venv", "venv", "*.min.js",
+              "test", "tests", "__tests__", "AISecCore", ".github"]
+    per_rule_timeout: 30
+    timeout_seconds: 1800
+  osv_scanner:
+    timeout_seconds: 1800
+
 fix:
   max_budget_usd: 5.0
   timeout_seconds: 1800

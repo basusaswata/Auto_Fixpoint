@@ -123,7 +123,10 @@ def plan(findings: list[Finding], policy: Policy, branch: str, max_prs: int | No
             "autonomy": autonomy,
             "files": [manifest],
             "package": {"ecosystem": eco, "name": pkg.name, "manifest": manifest,
-                        "current_version": pkg.version, "target_version": target},
+                        "current_version": pkg.version, "target_version": target,
+                        "transitive": any(f.properties.get("transitive") for f in included),
+                        "managed": any(f.properties.get("managed") for f in included)},
+            "source": included[0].source,
         })
 
     groups.sort(key=lambda g: (SEVERITY_RANK[g["severity"]], g["kind"] != "sca", g["id"]))

@@ -90,12 +90,13 @@ def cmd_inputs(a: argparse.Namespace) -> int:
 
     raw = {k: os.environ.get(f"FP_{k.upper()}", "") for k in
            ("repo", "branch", "sast_report", "sast_format", "sca_report", "sca_format", "mode", "max_prs",
-            "dry_run", "actor")}
+            "dry_run", "actor", "scan_engine")}
     run = run_context_from_env(validate_inputs(raw))
     write_json(a.out, run)
     owner, name = run["repo"].split("/")
     _gh_output(repo=run["repo"], owner=owner, name=name, branch=run["branch"], mode=run["mode"],
-               dry_run=str(run["dry_run"]).lower(), sast_report=run["sast_report"], sca_report=run["sca_report"])
+               dry_run=str(run["dry_run"]).lower(), sast_report=run["sast_report"], sca_report=run["sca_report"],
+               scan_engine=run["scan_engine"])
     return 0
 
 
@@ -185,6 +186,20 @@ def cmd_discover(a: argparse.Namespace) -> int:
     res = fn(Path(a.repo_dir), run["repo"], run["sha"], policy, lock, _runtime())
     res.meta["skill_version"] = lock.version
     save_findings(a.out, res.findings, res.meta)
+    return 0
+
+
+def cmd_scan(a: argparse.Namespace) -> int:
+    """Run an open-source scanner (Semgrep for SAST, OSV-Scanner for SCA) and convert its output."""
+    from fixpoint import scanners
+    from fixpoint.model import save_findings
+
+    run, lock = _run(a), _lock(a)
+    out = Path(a.out)
+    res = scanners.scan(a.kind, Path(a.repo_dir), run["sha"], _policy(a), out.parent)
+    res.meta["skill_version"] = lock.version
+    save_findings(out, res.findings, res.meta)
+    print(json.dumps({"kind": a.kind, "findings": len(res.findings)}))
     return 0
 
 
@@ -459,6 +474,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--run", required=True)
     s.add_argument("--out", required=True)
     s.set_defaults(fn=cmd_discover)
+
+    s = sub.add_parser("scan", help="scanner mode: run Semgrep (sast) or OSV-Scanner (sca) and convert the output")
+    s.add_argument("--kind", choices=["sast", "sca"], required=True)
+    s.add_argument("--repo-dir", required=True)
+    s.add_argument("--run", required=True)
+    s.add_argument("--out", required=True, help="findings JSON; the raw scanner output is written next to it")
+    s.set_defaults(fn=cmd_scan)
 
     s = sub.add_parser("align", help="merge findings and re-anchor them to the pinned commit")
     s.add_argument("--in", dest="inputs", action="append", required=True)

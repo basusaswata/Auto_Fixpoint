@@ -1,0 +1,37 @@
+{
+  "results": [
+    {
+      "source": {"path": "__REPO__/pom.xml", "type": "lockfile"},
+      "packages": [
+        {
+          "package": {"name": "org.springframework:spring-web", "version": "6.0.2", "ecosystem": "Maven"},
+          "dependency_groups": ["compile"],
+          "vulnerabilities": [
+            {"id": "GHSA-ccgv-vj62-xf9h", "aliases": ["CVE-2024-22243"], "summary": "Spring Web vulnerable to Open Redirect or Server Side Request Forgery",
+             "database_specific": {"severity": "HIGH", "cwe_ids": ["CWE-601"]},
+             "affected": [{"package": {"ecosystem": "Maven", "name": "org.springframework:spring-web"},
+                           "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "6.0.0"}, {"fixed": "6.0.17"}]}]}]},
+            {"id": "GHSA-2wrp-6fg6-hmc5", "aliases": ["CVE-2024-22262"], "summary": "Spring Framework URL Parsing with Host Validation",
+             "database_specific": {"severity": "HIGH", "cwe_ids": ["CWE-601"]},
+             "affected": [{"package": {"ecosystem": "Maven", "name": "org.springframework:spring-web"},
+                           "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "6.0.0"}, {"fixed": "6.0.19"}]}]}]}
+          ],
+          "groups": [
+            {"ids": ["GHSA-ccgv-vj62-xf9h"], "aliases": ["CVE-2024-22243", "GHSA-ccgv-vj62-xf9h"], "max_severity": "8.1"},
+            {"ids": ["GHSA-2wrp-6fg6-hmc5"], "aliases": ["CVE-2024-22262", "GHSA-2wrp-6fg6-hmc5"], "max_severity": "8.1"}
+          ]
+        },
+        {
+          "package": {"name": "com.h2database:h2", "version": "2.1.214", "ecosystem": "Maven"},
+          "vulnerabilities": [
+            {"id": "GHSA-h376-j262-vhq6", "aliases": ["CVE-2022-45868"], "summary": "H2 Database password exposure",
+             "database_specific": {"severity": "HIGH"},
+             "affected": [{"package": {"ecosystem": "Maven", "name": "com.h2database:h2"},
+                           "ranges": [{"type": "ECOSYSTEM", "events": [{"introduced": "0"}, {"fixed": "2.2.220"}]}]}]}
+          ],
+          "groups": [{"ids": ["GHSA-h376-j262-vhq6"], "aliases": ["CVE-2022-45868", "GHSA-h376-j262-vhq6"], "max_severity": "7.8"}]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "invocations": [{"executionSuccessful": true, "toolExecutionNotifications": []}],
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "semanticVersion": "1.179.0",
+          "rules": [
+            {
+              "id": "java.spring.security.injection.tainted-sql-string.tainted-sql-string",
+              "name": "java.spring.security.injection.tainted-sql-string.tainted-sql-string",
+              "shortDescription": {"text": "Semgrep Finding: java.spring.security.injection.tainted-sql-string.tainted-sql-string"},
+              "fullDescription": {"text": "User data flows into this manually-constructed SQL string."},
+              "defaultConfiguration": {"level": "error"},
+              "properties": {
+                "precision": "very-high",
+                "tags": ["CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+                         "HIGH CONFIDENCE", "OWASP-A03:2021 - Injection", "security"]
+              }
+            },
+            {
+              "id": "java.lang.security.audit.crlf-injection-logs.crlf-injection-logs",
+              "name": "java.lang.security.audit.crlf-injection-logs.crlf-injection-logs",
+              "shortDescription": {"text": "Semgrep Finding: java.lang.security.audit.crlf-injection-logs.crlf-injection-logs"},
+              "defaultConfiguration": {"level": "warning"},
+              "properties": {"tags": ["CWE-93: Improper Neutralization of CRLF Sequences ('CRLF Injection')", "security"]}
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "java.spring.security.injection.tainted-sql-string.tainted-sql-string",
+          "message": {"text": "User data flows into this manually-constructed SQL string."},
+          "locations": [{"physicalLocation": {
+            "artifactLocation": {"uri": "src/main/java/com/homelab/vulbankapi/VulnBankController.java", "uriBaseId": "%SRCROOT%"},
+            "region": {"startLine": 7, "startColumn": 9, "endLine": 7, "endColumn": 90, "snippet": {"text": "requires login"}}}}],
+          "fingerprints": {"matchBasedId/v1": "requires login"},
+          "properties": {}
+        },
+        {
+          "ruleId": "java.lang.security.audit.crlf-injection-logs.crlf-injection-logs",
+          "message": {"text": "When data from an untrusted source is put into a logger and not neutralized correctly..."},
+          "locations": [{"physicalLocation": {
+            "artifactLocation": {"uri": "src/main/java/com/homelab/vulbankapi/VulnBankController.java"},
+            "region": {"startLine": 11, "endLine": 11, "snippet": {"text": "requires login"}}}}],
+          "properties": {}
+        }
+      ]
+    }
+  ]
+}

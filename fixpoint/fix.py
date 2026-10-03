@@ -29,6 +29,21 @@ def detect_commands(repo_dir: Path, policy: Policy):
     return None
 
 
+def dependency_note(pkg: dict[str, Any]) -> str:
+    """How the dependency reaches the build, so the fix-cve agent pins it the right way."""
+    if pkg.get("transitive"):
+        return (f"`{pkg['name']}` is a TRANSITIVE dependency: it is not declared in `{pkg['manifest']}` but pulled in by "
+                "another dependency or the parent. Pin it explicitly in that manifest with the ecosystem's override "
+                "mechanism (Maven: a `<dependencyManagement>` entry with groupId, artifactId and version; Gradle: a "
+                "constraint; npm: `overrides`; Python: a pinned requirement). The manifest must name the package and "
+                "the target version. Do not upgrade unrelated dependencies.")
+    if pkg.get("managed"):
+        return (f"`{pkg['name']}` is declared in `{pkg['manifest']}` WITHOUT a version (it is managed by a parent/BOM). "
+                "Add an explicit version for it (Maven: `<version>` on that dependency, or a `<dependencyManagement>` "
+                "entry), so the manifest names the package and the target version.")
+    return f"`{pkg['name']}` is declared directly in `{pkg['manifest']}`: change its version there."
+
+
 def run_fix(group: dict[str, Any], findings: list[Finding], repo_dir: Path, repo: str, sha: str, policy: Policy,
             lock: SkillsLock, runtime: AgentRuntime, out_dir: Path) -> dict[str, Any]:
     gid = group["id"]
@@ -54,7 +69,7 @@ def run_fix(group: dict[str, Any], findings: list[Finding], repo_dir: Path, repo
         p = group["package"]
         prompt = prompts.render(
             "fix-cve", package=p["name"], ecosystem=p["ecosystem"], current_version=p["current_version"],
-            target_version=p["target_version"], manifest=p["manifest"],
+            target_version=p["target_version"], manifest=p["manifest"], dependency_note=dependency_note(p),
             vulns=wrap_untrusted("vulns", ", ".join(group["cve"])), **common,
         )
     else:
