@@ -144,7 +144,9 @@ def test_semgrep_failures(repo, policy, tmp_path, monkeypatch):
 def test_osv_scanner_transitive_and_managed(repo, osv_scanner, policy, tmp_path):
     res = scanners.scan("sca", repo, SHA, policy, tmp_path / "work")
     assert res.meta["sca_mode"] == "scanner" and (tmp_path / "work" / "osv-scanner.json").is_file()
-    assert osv_scanner.read_text().strip() == "scan source -r --format json ."
+    assert osv_scanner.read_text().strip() == "scan source -r --all-packages --verbosity info --format json ."
+    assert (tmp_path / "work" / "osv-scanner.log").is_file()
+    assert "packages resolved via deps.dev" in res.meta["sca_engine"]
     by = {f.package.name: f for f in res.findings if "spring-web" not in f.package.name}
     web = [f for f in res.findings if f.package.name == "org.springframework:spring-web"]
     assert len(web) == 2 and all(f.package.manifest == "pom.xml" for f in res.findings)  # absolute path relativised
@@ -249,3 +251,24 @@ def test_verify_runs_osv_scanner_on_patched_tree(tmp_path, policy, lock, monkeyp
                                  ScriptedRuntime({"verify": [verdict]}), Osv())
         check = next(c for c in v["checks"] if c["name"] == "osv-scanner-rescan")
         assert check["passed"] is expect and v["passed"] is expect, v["checks"]
+
+
+def test_osv_scanner_maven_fallback_and_warning(repo, policy, tmp_path, monkeypatch):
+    doc = (FIXTURES / "osv-scanner.vulnbank.json").read_text().replace("__REPO__", str(repo.resolve()))
+    (tmp_path / "native.out").write_text(doc)
+    # deps.dev resolution yields nothing; Maven Central (native) resolves the tree
+    body = (f'case "$*" in *--data-source=native*) cat "{tmp_path}/native.out"; exit 1;; '
+            f'*) echo \'{{"results": []}}\'; echo "resolution failed" >&2; exit 0;; esac')
+    path, calls = fake_tool(tmp_path, "osv-scanner", body)
+    monkeypatch.setenv("FIXPOINT_OSV_SCANNER_BIN", str(path))
+    res = scanners.scan("sca", repo, SHA, policy, tmp_path / "work")
+    assert len(calls.read_text().splitlines()) == 2 and "--data-source=native" in calls.read_text()
+    assert len(res.findings) == 3 and "via native" in res.meta["sca_engine"]
+    assert "resolution failed" in (tmp_path / "work" / "osv-scanner.log").read_text()
+    assert res.meta["discover_errors"] == []
+
+    # nothing resolved either way although pom.xml exists -> visible warning, not a silent "0 findings"
+    path, _ = fake_tool(tmp_path / "x", "osv-scanner", 'echo \'{"results": []}\'\nexit 0')
+    monkeypatch.setenv("FIXPOINT_OSV_SCANNER_BIN", str(path))
+    res = scanners.scan("sca", repo, SHA, policy, tmp_path / "work2")
+    assert res.findings == [] and "resolved no dependencies" in res.meta["discover_errors"][0]

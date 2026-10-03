@@ -79,6 +79,8 @@ def test_self_sufficient_install():
     uses = " ".join(str(s.get("uses", "")) for s in steps)
     for action in ("actions/setup-python@", "actions/setup-node@", "actions/setup-java@", "actions/setup-go@"):
         assert action in uses
+    node = step(steps, "Node.js 22")
+    assert node["with"]["node-version"] == "22"  # Claude Code requires Node >= 22
     install = step(steps, "Install git, fixpoint CLI and Claude Code")["run"]
     assert "npm install -g" in install and "pip install" in install
     assert "fixpoint skills install" in step(steps, "Fetch pinned skills")["run"]

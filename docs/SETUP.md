@@ -46,7 +46,7 @@ change the workflow can use the App key.
 |---|---|
 | git (if missing) | `apt-get` |
 | Python 3.11 + `fixpoint` CLI (`pyyaml`, `requests`) | `actions/setup-python` + `pip install .` |
-| Node.js 20 + Claude Code `FIXPOINT_CLAUDE_VERSION` | `actions/setup-node` + `npm install -g` |
+| Node.js 22 + Claude Code `FIXPOINT_CLAUDE_VERSION` (requires Node >= 22) | `actions/setup-node` + `npm install -g` |
 | AISecCore skills (commit + hash from `skills.lock`) | `fixpoint skills install` |
 | Semgrep CE `SEMGREP_VERSION` (only with `scan_engine: scanner`) | `pip install` into its own venv |
 | OSV-Scanner `OSV_SCANNER_VERSION` (only with `scan_engine: scanner`) | release binary from GitHub, `sha256sum -c` against `OSV_SCANNER_SHA256` |

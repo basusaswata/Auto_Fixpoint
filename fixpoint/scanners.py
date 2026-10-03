@@ -118,29 +118,59 @@ def sast_findings(doc: dict[str, Any], repo_dir: Path, sha: str) -> list[Finding
 # -- OSV-Scanner (SCA) -------------------------------------------------------------
 
 
-def run_osv_scanner(repo_dir: Path, policy: Policy, out: Path | None = None) -> dict[str, Any]:
-    exe = binary("osv-scanner")
-    if not exe:
-        raise ScannerError("osv-scanner is not installed (the workflow installs it when scan_engine=scanner)")
-    cfg = _cfg(policy, "osv_scanner")
-    argv = [exe, "scan", "source", "-r", "--format", "json", "."]
+def _osv_once(argv: list[str], repo_dir: Path, timeout: int) -> tuple[dict[str, Any], str]:
     try:
-        r = subprocess.run(argv, cwd=repo_dir, env=_env(), capture_output=True, text=True,
-                           timeout=int(cfg.get("timeout_seconds", 1800)), check=False)
+        r = subprocess.run(argv, cwd=repo_dir, env=_env(), capture_output=True, text=True, timeout=timeout,
+                           check=False)
     except subprocess.TimeoutExpired as e:
         raise ScannerError("osv-scanner timed out") from e
     # 0 = no vulns, 1 = vulns found, 128 = no package sources found (nothing to scan)
     if r.returncode == 128 and "no package sources" in (r.stderr + r.stdout).lower():
-        doc: dict[str, Any] = {"results": []}
-    elif r.returncode in (0, 1):
-        try:
-            doc = json.loads(r.stdout or '{"results": []}')
-        except json.JSONDecodeError as e:
-            raise ScannerError("osv-scanner produced invalid JSON") from e
-    else:
+        return {"results": []}, r.stderr
+    if r.returncode not in (0, 1):
         raise ScannerError(f"osv-scanner exit {r.returncode}: {log.redact(r.stderr.strip())[-800:]}")
+    try:
+        return json.loads(r.stdout or '{"results": []}'), r.stderr
+    except json.JSONDecodeError as e:
+        raise ScannerError("osv-scanner produced invalid JSON") from e
+
+
+def package_count(doc: dict[str, Any], ecosystem: str | None = None) -> int:
+    return sum(1 for res in doc.get("results") or [] for p in res.get("packages") or []
+               if ecosystem is None or (p.get("package") or {}).get("ecosystem") == ecosystem)
+
+
+def _has_pom(repo_dir: Path) -> bool:
+    return any(p.is_file() for p in repo_dir.rglob("pom.xml") if ".git" not in p.parts)
+
+
+def run_osv_scanner(repo_dir: Path, policy: Policy, out: Path | None = None) -> dict[str, Any]:
+    """Scan with every resolved package listed (--all-packages) and OSV-Scanner's log kept.
+
+    Maven: pom.xml versions inherited from a parent/BOM are resolved through deps.dev by default.
+    If a pom.xml exists but nothing Maven was resolved, retry once against Maven Central
+    (--data-source=native) before concluding there is nothing to report.
+    """
+    exe = binary("osv-scanner")
+    if not exe:
+        raise ScannerError("osv-scanner is not installed (the workflow installs it when scan_engine=scanner)")
+    cfg = _cfg(policy, "osv_scanner")
+    timeout = int(cfg.get("timeout_seconds", 1800))
+    base = [exe, "scan", "source", "-r", "--all-packages", "--verbosity", "info", "--format", "json",
+            *[str(a) for a in cfg.get("extra_args") or []]]
+    doc, stderr = _osv_once([*base, "."], repo_dir, timeout)
+    logs = [f"$ {' '.join(base[1:])} .", stderr]
+    if _has_pom(repo_dir) and package_count(doc, "Maven") == 0 and cfg.get("maven_native_fallback", True):
+        LOG.warning("osv-scanner resolved no Maven packages from pom.xml via deps.dev; retrying with Maven Central")
+        doc2, stderr2 = _osv_once([*base, "--data-source=native", "."], repo_dir, timeout)
+        logs += [f"$ {' '.join(base[1:])} --data-source=native .", stderr2]
+        if package_count(doc2, "Maven") > 0:
+            doc = doc2
+            doc["fixpoint_data_source"] = "native"
+    LOG.info("osv-scanner: %d packages resolved (%d Maven)", package_count(doc), package_count(doc, "Maven"))
     if out:
         write_json(out, doc)
+        out.with_suffix(".log").write_text(log.redact("\n".join(logs)), encoding="utf-8")
     return doc
 
 
@@ -189,11 +219,24 @@ def scan(kind: str, repo_dir: Path, sha: str, policy: Policy, raw_dir: Path) -> 
         raw = raw_dir / "osv-scanner.json"
         doc = run_osv_scanner(repo_dir, policy, raw)
         found = sca_findings(doc, repo_dir)
-        meta = {"sca_mode": "scanner", "sca_engine": "osv-scanner", "scanner_raw": raw.name}
+        resolved = package_count(doc)
+        source = doc.get("fixpoint_data_source", "deps.dev")
+        meta = {"sca_mode": "scanner", "sca_engine": f"osv-scanner, {resolved} packages resolved via {source}",
+                "scanner_raw": raw.name, "packages_resolved": resolved}
+        if resolved == 0 and _has_manifest(repo_dir, policy):
+            return ScanResult(found, {**meta, "discover_errors": [
+                "osv-scanner resolved no dependencies although the repo has a manifest; "
+                "dependency findings may be missing (see osv-scanner.log in the artifact)"]})
     else:
         raise ScannerError(f"unknown kind {kind!r}")
     LOG.info("%s scanner: %d findings", kind, len(found))
     return ScanResult(found, {**meta, "discover_errors": []})
+
+
+def _has_manifest(repo_dir: Path, policy: Policy) -> bool:
+    from fixpoint.scan import find_manifests  # local import: scan is imported at module load
+
+    return bool(find_manifests(repo_dir, policy))
 
 
 def is_deterministic(f: Finding) -> bool:
