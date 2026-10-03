@@ -107,14 +107,35 @@ def test_scanner_install_is_pinned_and_verified():
     env = doc["jobs"]["fixpoint"]["env"]
     assert re.match(r"^\d+\.\d+\.\d+$", env["SEMGREP_VERSION"]) and re.match(r"^\d+\.\d+\.\d+$", env["OSV_SCANNER_VERSION"])
     assert re.match(r"^[0-9a-f]{64}$", env["OSV_SCANNER_SHA256"])
-    install = step(steps, "Install scanners")
-    assert "scan_engine == 'scanner'" in install["if"] and "env" not in install
-    run = install["run"]
-    assert 'semgrep==${SEMGREP_VERSION}' in run and "semgrep-venv" in run
-    assert "releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" in run
-    assert run.index("sha256sum -c") < run.index("chmod +x")  # verified before it can run
+    semgrep = step(steps, "Install scanner - Semgrep")
+    osv = step(steps, "Install scanner - OSV-Scanner")
+    for s in (semgrep, osv):
+        assert "scan_engine == 'scanner'" in s["if"] and "env" not in s
+    # each scanner is installed only when its scan type is in scope and no report replaces it
+    assert "scan_scope != 'sca'" in semgrep["if"] and "sast_report == ''" in semgrep["if"]
+    assert "scan_scope != 'sast'" in osv["if"] and "sca_report == ''" in osv["if"]
+    assert 'semgrep==${SEMGREP_VERSION}' in semgrep["run"] and "semgrep-venv" in semgrep["run"]
+    assert "releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64" in osv["run"]
+    assert osv["run"].index("sha256sum -c") < osv["run"].index("chmod +x")  # verified before it can run
     names = [s.get("name", "") for s in steps]
-    assert names.index(install["name"]) < names.index("SAST - scanner (Semgrep)")
+    assert names.index(semgrep["name"]) < names.index("SAST - scanner (Semgrep)")
+    assert names.index(osv["name"]) < names.index("SCA - scanner (OSV-Scanner)")
+
+
+def test_scan_scope():
+    doc, steps = main_steps()
+    on = doc.get("on") or doc.get(True)
+    scope = on["workflow_dispatch"]["inputs"]["scan_scope"]
+    assert scope["options"] == ["both", "sast", "sca"] and scope["default"] == "both"
+    for s in steps:
+        name = s.get("name", "")
+        if name.startswith("SAST - "):
+            assert "scan_scope != 'sca'" in s["if"], name
+        if name.startswith("SCA - "):
+            assert "scan_scope != 'sast'" in s["if"], name
+    align_step = step(steps, "Align findings")
+    assert align_step["env"]["SCOPE"] == "${{ steps.inputs.outputs.scan_scope }}"
+    assert '"$SCOPE" != "sca"' in align_step["run"] and '"$SCOPE" != "sast"' in align_step["run"]
 
 
 def test_secret_scoping_inside_the_job():

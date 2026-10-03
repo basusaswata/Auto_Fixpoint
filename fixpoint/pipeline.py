@@ -55,6 +55,9 @@ def validate_inputs(raw: dict[str, Any]) -> dict[str, Any]:
     mode = str(raw.get("mode") or "review").strip()
     if mode not in ("review", "fix"):
         raise InputError("mode must be review or fix")
+    scan_scope = str(raw.get("scan_scope") or "both").strip() or "both"
+    if scan_scope not in ("both", "sast", "sca"):
+        raise InputError("scan_scope must be both, sast or sca")
     scan_engine = str(raw.get("scan_engine") or "ai").strip() or "ai"
     if scan_engine not in ("ai", "scanner"):
         raise InputError("scan_engine must be ai or scanner")
@@ -66,6 +69,7 @@ def validate_inputs(raw: dict[str, Any]) -> dict[str, Any]:
         "branch": branch,
         "mode": mode,
         "scan_engine": scan_engine,
+        "scan_scope": scan_scope,
         "max_prs": int(max_prs_raw) if max_prs_raw else None,
         "dry_run": str(raw.get("dry_run") or "").lower() in ("1", "true", "yes"),
     }
@@ -78,6 +82,12 @@ def validate_inputs(raw: dict[str, Any]) -> dict[str, Any]:
     actor = str(raw.get("actor") or "").strip()
     out["actor"] = actor if re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$", actor) else "unknown"
     return out
+
+
+def in_scope(run: dict[str, Any]) -> tuple[str, ...]:
+    """Scan types this run covers (input scan_scope: both | sast | sca)."""
+    scope = run.get("scan_scope") or "both"
+    return ("sast", "sca") if scope == "both" else (scope,)
 
 
 def run_context_from_env(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -124,7 +134,7 @@ def get_findings(repo_dir: Path, run: dict[str, Any], policy: Policy, lock: Skil
     all_f: list[list[Finding]] = []
     meta: dict[str, Any] = {"skill_version": lock.version, "discover_errors": []}
     max_bytes = int(policy.limits.get("report_max_bytes", 25 * 1024 * 1024))
-    for kind in ("sast", "sca"):
+    for kind in in_scope(run):
         src = run.get(f"{kind}_report")
         if src:
             fs = ingest.ingest(src, run.get(f"{kind}_format", "auto"), kind, max_bytes)

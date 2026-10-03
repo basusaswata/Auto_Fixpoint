@@ -90,13 +90,13 @@ def cmd_inputs(a: argparse.Namespace) -> int:
 
     raw = {k: os.environ.get(f"FP_{k.upper()}", "") for k in
            ("repo", "branch", "sast_report", "sast_format", "sca_report", "sca_format", "mode", "max_prs",
-            "dry_run", "actor", "scan_engine")}
+            "dry_run", "actor", "scan_engine", "scan_scope")}
     run = run_context_from_env(validate_inputs(raw))
     write_json(a.out, run)
     owner, name = run["repo"].split("/")
     _gh_output(repo=run["repo"], owner=owner, name=name, branch=run["branch"], mode=run["mode"],
                dry_run=str(run["dry_run"]).lower(), sast_report=run["sast_report"], sca_report=run["sca_report"],
-               scan_engine=run["scan_engine"])
+               scan_engine=run["scan_engine"], scan_scope=run["scan_scope"])
     return 0
 
 
@@ -206,15 +206,21 @@ def cmd_scan(a: argparse.Namespace) -> int:
 def cmd_align(a: argparse.Namespace) -> int:
     from fixpoint import align, scan
     from fixpoint.model import load_findings, merge_findings, save_findings
+    from fixpoint.pipeline import in_scope
 
     run, policy = _run(a), _policy(a)
+    scope = in_scope(run)
     groups, meta = [], {"discover_errors": []}
-    for p in a.inputs:
+    for p in a.inputs or []:
         fs, m = load_findings(p)
-        groups.append(fs)
+        groups.append([f for f in fs if f.kind in scope])
         errs = m.pop("discover_errors", [])
         meta.update(m)
         meta["discover_errors"] += errs
+    meta["scan_scope"] = run.get("scan_scope", "both")
+    for kind in ("sast", "sca"):  # scope wins over anything an input file claimed
+        if kind not in scope:
+            meta[f"{kind}_mode"], meta[f"{kind}_engine"] = "skipped", "not in scan_scope"
     findings = merge_findings(*groups)
     align.align(findings, Path(a.repo_dir), run["sha"], scan.find_manifests(Path(a.repo_dir), policy))
     save_findings(a.out, findings, meta)
@@ -483,7 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_scan)
 
     s = sub.add_parser("align", help="merge findings and re-anchor them to the pinned commit")
-    s.add_argument("--in", dest="inputs", action="append", required=True)
+    s.add_argument("--in", dest="inputs", action="append", default=[],
+                   help="findings file per in-scope scan type (repeatable)")
     s.add_argument("--repo-dir", required=True)
     s.add_argument("--run", required=True)
     s.add_argument("--out", required=True)

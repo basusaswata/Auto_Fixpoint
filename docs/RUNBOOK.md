@@ -16,11 +16,14 @@ gh api repos/<org>/ai-ssdlc-fixpoint/dispatches -f event_type=fixpoint-sweep \
   -F client_payload[mode]=fix -F client_payload[max_prs]=2 -F client_payload[requested_by]=<login>
 ```
 
-Inputs: `repo`, `branch` (required); `mode` (`review|fix`); `scan_engine` (`ai|scanner`);
+Inputs: `repo`, `branch` (required); `mode` (`review|fix`); `scan_scope` (`both|sast|sca`: code, dependencies,
+or both); `scan_engine` (`ai|scanner`);
 `sast_report`, `sca_report` (https URL or a path inside the target repo), `sast_format` (`auto|sarif`),
 `sca_format` (`auto|snyk|osv|sarif`); `max_prs`, `dry_run`. One run per repo+branch at a time; later ones queue.
 
-Where findings come from, decided separately for SAST and SCA:
+Only the scan types in `scan_scope` run (a report for an out-of-scope type is ignored, and its scanner is not
+installed); the report marks the other type as `skipped`. Where findings come from, decided separately for
+SAST and SCA:
 
 | Report supplied? | `scan_engine` | SAST | SCA |
 |---|---|---|---|

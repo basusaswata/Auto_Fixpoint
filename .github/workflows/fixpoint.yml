@@ -4,7 +4,7 @@
 #   -> install tools (Python, Node, Claude Code)
 #   -> pin branch, check out target, strip agent config
 #   -> fetch + verify pinned skills from the skills repo
-#   -> findings, per scan type: the supplied report, else
+#   -> findings for each scan type in scan_scope (both | sast | sca): the supplied report, else
 #        scan_engine=scanner: open-source scanners (SAST: Semgrep, SCA: OSV-Scanner)
 #        scan_engine=ai:      AI scan (SAST: review skill, SCA: skill inventory confirmed by OSV)
 #   -> align, dedupe, triage, plan
@@ -28,6 +28,11 @@ on:
         type: choice
         options: [review, fix]
         default: review
+      scan_scope:
+        description: "What to scan: both = code (SAST) + dependencies (SCA) · sast = code only · sca = dependencies only"
+        type: choice
+        options: [both, sast, sca]
+        default: both
       scan_engine:
         description: "When no report is supplied: ai = AI analyses the codebase · scanner = run Semgrep (SAST) + OSV-Scanner (SCA)"
         type: choice
@@ -127,22 +132,27 @@ jobs:
           FP_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run }}
           FP_ACTOR: ${{ github.event.client_payload.requested_by || github.triggering_actor || github.actor }}
           FP_SCAN_ENGINE: ${{ github.event.inputs.scan_engine || github.event.client_payload.scan_engine }}
+          FP_SCAN_SCOPE: ${{ github.event.inputs.scan_scope || github.event.client_payload.scan_scope }}
         run: fixpoint inputs --out "$W/run.json"
 
-      - name: Install scanners (Semgrep, OSV-Scanner)
-        if: steps.inputs.outputs.scan_engine == 'scanner' && (steps.inputs.outputs.sast_report == '' || steps.inputs.outputs.sca_report == '')
+      - name: Install scanner - Semgrep (SAST)
+        if: steps.inputs.outputs.scan_engine == 'scanner' && steps.inputs.outputs.scan_scope != 'sca' && steps.inputs.outputs.sast_report == ''
         run: |
           # Semgrep CE in its own venv, so its dependencies never touch Fixpoint's
           python -m venv "$RUNNER_TEMP/semgrep-venv"
           "$RUNNER_TEMP/semgrep-venv/bin/pip" install --disable-pip-version-check -q "semgrep==${SEMGREP_VERSION}"
           echo "FIXPOINT_SEMGREP_BIN=$RUNNER_TEMP/semgrep-venv/bin/semgrep" >> "$GITHUB_ENV"
-          # OSV-Scanner: official release binary, checksum-verified before it is made executable
+          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" --version
+
+      - name: Install scanner - OSV-Scanner (SCA)
+        if: steps.inputs.outputs.scan_engine == 'scanner' && steps.inputs.outputs.scan_scope != 'sast' && steps.inputs.outputs.sca_report == ''
+        run: |
+          # Official release binary, checksum-verified before it is made executable
           curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
             "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
           echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/osv-scanner"
           echo "FIXPOINT_OSV_SCANNER_BIN=$RUNNER_TEMP/osv-scanner" >> "$GITHUB_ENV"
-          "$RUNNER_TEMP/semgrep-venv/bin/semgrep" --version
           "$RUNNER_TEMP/osv-scanner" --version
 
       - name: App token for the target repo (checkout + dedupe; revoked before any build)
@@ -180,42 +190,48 @@ jobs:
 
       # ---------------------------------------------------------------- findings
       - name: SAST - ingest report
-        if: steps.inputs.outputs.sast_report != ''
+        if: steps.inputs.outputs.scan_scope != 'sca' && steps.inputs.outputs.sast_report != ''
         env:
           REPORT: ${{ steps.inputs.outputs.sast_report }}
           FORMAT: ${{ github.event.inputs.sast_format || github.event.client_payload.sast_format || 'auto' }}
         run: fixpoint ingest --kind sast --report "$REPORT" --format "$FORMAT" --base-dir "$T" --out "$W/sast.json"
 
       - name: SAST - scanner (Semgrep)
-        if: steps.inputs.outputs.sast_report == '' && steps.inputs.outputs.scan_engine == 'scanner'
+        if: steps.inputs.outputs.scan_scope != 'sca' && steps.inputs.outputs.sast_report == '' && steps.inputs.outputs.scan_engine == 'scanner'
         run: fixpoint scan --kind sast --repo-dir "$T" --run "$W/run.json" --out "$W/sast.json"
 
       - name: SAST - AI scan (review skill)
-        if: steps.inputs.outputs.sast_report == '' && steps.inputs.outputs.scan_engine != 'scanner'
+        if: steps.inputs.outputs.scan_scope != 'sca' && steps.inputs.outputs.sast_report == '' && steps.inputs.outputs.scan_engine != 'scanner'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
         run: fixpoint discover --kind sast --repo-dir "$T" --run "$W/run.json" --out "$W/sast.json"
 
       - name: SCA - ingest report
-        if: steps.inputs.outputs.sca_report != ''
+        if: steps.inputs.outputs.scan_scope != 'sast' && steps.inputs.outputs.sca_report != ''
         env:
           REPORT: ${{ steps.inputs.outputs.sca_report }}
           FORMAT: ${{ github.event.inputs.sca_format || github.event.client_payload.sca_format || 'auto' }}
         run: fixpoint ingest --kind sca --report "$REPORT" --format "$FORMAT" --base-dir "$T" --out "$W/sca.json"
 
       - name: SCA - scanner (OSV-Scanner)
-        if: steps.inputs.outputs.sca_report == '' && steps.inputs.outputs.scan_engine == 'scanner'
+        if: steps.inputs.outputs.scan_scope != 'sast' && steps.inputs.outputs.sca_report == '' && steps.inputs.outputs.scan_engine == 'scanner'
         run: fixpoint scan --kind sca --repo-dir "$T" --run "$W/run.json" --out "$W/sca.json"
 
       - name: SCA - AI inventory + OSV lookup
-        if: steps.inputs.outputs.sca_report == '' && steps.inputs.outputs.scan_engine != 'scanner'
+        if: steps.inputs.outputs.scan_scope != 'sast' && steps.inputs.outputs.sca_report == '' && steps.inputs.outputs.scan_engine != 'scanner'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.FIXPOINT_ANTHROPIC_API_KEY }}
         run: fixpoint discover --kind sca --repo-dir "$T" --run "$W/run.json" --out "$W/sca.json"
 
       # ---------------------------------------------------------------- review
       - name: Align findings to the pinned commit
-        run: fixpoint align --in "$W/sast.json" --in "$W/sca.json" --repo-dir "$T" --run "$W/run.json" --out "$W/aligned.json"
+        env:
+          SCOPE: ${{ steps.inputs.outputs.scan_scope }}
+        run: |
+          args=()
+          if [ "$SCOPE" != "sca" ]; then args+=(--in "$W/sast.json"); fi
+          if [ "$SCOPE" != "sast" ]; then args+=(--in "$W/sca.json"); fi
+          fixpoint align "${args[@]}" --repo-dir "$T" --run "$W/run.json" --out "$W/aligned.json"
 
       - name: Dedupe against existing Fixpoint PRs
         env:

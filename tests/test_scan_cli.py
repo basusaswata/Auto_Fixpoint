@@ -213,3 +213,35 @@ def test_skills_install_requires_role_skills(tmp_path):
     (tmp_path / "AISecCore/skills").mkdir(parents=True)
     with pytest.raises(skills.SkillsError):
         skills.install(tmp_path, tmp_path / "h", lock)
+
+
+def test_scan_scope_input_and_align(tmp_path, monkeypatch):
+    from fixpoint.model import save_findings
+    from fixpoint.pipeline import in_scope
+
+    assert validate_inputs({"repo": "a/b", "branch": "main"})["scan_scope"] == "both"
+    assert in_scope({"scan_scope": "sca"}) == ("sca",) and in_scope({}) == ("sast", "sca")
+    with pytest.raises(InputError):
+        validate_inputs({"repo": "a/b", "branch": "main", "scan_scope": "dast"})
+
+    monkeypatch.chdir(ROOT)
+    repo = make_repo(tmp_path / "r", FILES)
+    sca_doc = tmp_path / "sca.json"
+    assert cli.main(["ingest", "--kind", "sca", "--report", str(FIXTURES / "snyk.json"), "--out", str(sca_doc)]) == 0
+    run = tmp_path / "run.json"
+    write_json(run, {"repo": "a/b", "branch": "main", "sha": "a" * 40, "scan_scope": "sca"})
+    out = tmp_path / "aligned.json"
+    # only the in-scope file is passed, exactly as the workflow does for scan_scope=sca
+    assert cli.main(["align", "--in", str(sca_doc), "--repo-dir", str(repo), "--run", str(run),
+                     "--out", str(out)]) == 0
+    fs, meta = load_findings(out)
+    assert {f.kind for f in fs} == {"sca"}
+    assert meta["sast_mode"] == "skipped" and meta["sca_mode"] == "report" and meta["scan_scope"] == "sca"
+    # an out-of-scope file is ignored even if passed
+    sast_doc = tmp_path / "sast.json"
+    save_findings(sast_doc, [], {"sast_mode": "discover"})
+    write_json(run, {"repo": "a/b", "branch": "main", "sha": "a" * 40, "scan_scope": "sast"})
+    assert cli.main(["align", "--in", str(sca_doc), "--in", str(sast_doc), "--repo-dir", str(repo),
+                     "--run", str(run), "--out", str(out)]) == 0
+    fs, meta = load_findings(out)
+    assert fs == [] and meta["sca_mode"] == "skipped"

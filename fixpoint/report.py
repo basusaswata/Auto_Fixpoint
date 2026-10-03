@@ -145,8 +145,9 @@ def summary_md(findings: list[Finding], meta: dict[str, Any], plan: dict | None,
     L.append(f"Commit `{run.get('sha', '')[:12]}` · mode **{run.get('mode', 'review')}** · "
              f"[run]({run.get('run_url', '')}) · requested by @{run.get('actor', '?')}")
     L.append("")
-    L.append(f"- SAST: **{meta.get('sast_mode', '?')}** ({meta.get('sast_engine', meta.get('sast_format', ''))})")
-    L.append(f"- SCA: **{meta.get('sca_mode', '?')}** ({meta.get('sca_engine', meta.get('sca_format', ''))})")
+    for kind, label in (("sast", "SAST"), ("sca", "SCA")):
+        engine = meta.get(f"{kind}_engine", meta.get(f"{kind}_format", ""))
+        L.append(f"- {label}: **{meta.get(f'{kind}_mode', '?')}**" + (f" ({engine})" if engine else ""))
     if meta.get("skill_version"):
         L.append(f"- Skills: `{meta['skill_version']}`")
     if missing:
